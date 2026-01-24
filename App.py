@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 
 # Configurazione Pagina
-st.set_page_config(page_title="Equity Portfolio Paolo - Dettaglio Margini", layout="wide")
+st.set_page_config(page_title="Equity Portfolio Paolo - Fix Ticker", layout="wide")
 
 # --- FUNZIONE PER LEGGERE I MARGINI LIVE DA IBKR ---
 @st.cache_data(ttl=3600)
@@ -16,7 +16,7 @@ def get_ibkr_margins(url):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         response = requests.get(url, headers=header, timeout=15)
-        # Utilizziamo lxml per il parsing (assicurati di averlo nel requirements.txt)
+        # Necessario 'lxml' nel file requirements.txt
         tables = pd.read_html(response.text, flavor='lxml')
         
         margin_dict = {}
@@ -35,14 +35,13 @@ def get_ibkr_margins(url):
         st.error(f"Errore tecnico nella lettura IBKR: {e}")
         return {}
 
-st.markdown("# 📈 Analisi Equity e Dettaglio Margini Strumenti")
+st.markdown("# 📈 Analisi Equity e Dettaglio Margini (Fix Ticker)")
 
 # Scraping Live
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
 with st.spinner('Aggiornamento margini da Interactive Brokers...'):
     live_margins = get_ibkr_margins(url_ibkr)
 
-# Caricamento File
 uploaded_files = st.file_uploader("Carica i file TXT da Titan", type="txt", accept_multiple_files=True)
 
 if uploaded_files:
@@ -73,7 +72,6 @@ if uploaded_files:
             all_dates.extend(df['date'].tolist())
 
     if raw_data:
-        # --- CALCOLO E DETTAGLIO MARGINI ---
         st.sidebar.header("💰 Analisi Margini Live")
         margine_totale = 0
         dettaglio_strumenti = []
@@ -83,37 +81,32 @@ if uploaded_files:
         cols = st.columns(min(len(raw_data), 4))
         
         for i, name in enumerate(sorted(raw_data.keys())):
-            m_val = 0
-            ticker_trovato = "N/A"
-            # Matching ticker nel nome del file
-            for t in live_margins:
-                if t in name.upper():
-                    m_val = live_margins[t]
-                    ticker_trovato = t
-                    break
+            # --- LOGICA CORRETTA: Estraiamo il ticker prima del carattere '_' ---
+            ticker_estratto = name.split('_')[0].upper().strip()
+            
+            m_val = live_margins.get(ticker_estratto, 0)
             
             with cols[i % 4]:
-                if st.checkbox(f"{name} (${m_val:,.0f})", value=True, key=name):
+                label = f"{name} (${m_val:,.0f})" if m_val > 0 else f"{name} (Ticker {ticker_estratto} non trovato)"
+                if st.checkbox(label, value=True, key=name):
                     selected_names.append(name)
                     margine_totale += m_val
                     if m_val > 0:
                         dettaglio_strumenti.append({
                             "Strategia": name,
-                            "Ticker": ticker_trovato,
-                            "Margine Singolo ($)": m_val
+                            "Ticker": ticker_estratto,
+                            "Margine ($)": m_val
                         })
 
         if selected_names:
-            # Mostra Margine Totale
             st.sidebar.metric("Margine Totale Portafoglio", f"${margine_totale:,.2f}")
             
-            # Mostra Tabella Dettaglio Singoli Margini
             if dettaglio_strumenti:
                 st.sidebar.write("---")
-                st.sidebar.subheader("📌 Dettaglio Strumenti")
+                st.sidebar.subheader("📌 Dettaglio Margini")
                 df_dettaglio = pd.DataFrame(dettaglio_strumenti)
                 st.sidebar.dataframe(
-                    df_dettaglio.style.format({"Margine Singolo ($)": "{:,.2f}"}),
+                    df_dettaglio.style.format({"Margine ($)": "{:,.2f}"}),
                     hide_index=True,
                     use_container_width=True
                 )
@@ -144,7 +137,6 @@ if uploaded_files:
             fig.update_layout(plot_bgcolor='white', height=750, hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Performance Table con ROE
             st.write("### 📊 Risultati Annuali & ROE Live")
             df_plot['Year'] = df_plot['date'].dt.year
             res = df_plot.groupby('Year')[[n + '_pnl' for n in selected_names]].sum().round(0)
