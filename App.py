@@ -151,3 +151,7 @@ if uploaded_files:
 
 else:
     st.info("Trascina qui i file .txt per generare l'analisi.")
+        st.table(style_df(annual_pnl_with_total))
+
+else:
+    st.info("Trascina qui i file .txt per generare l'analisi.")
