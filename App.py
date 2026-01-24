@@ -5,9 +5,9 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import requests
 
-st.set_page_config(page_title="Netting Professionale Titan", layout="wide")
+st.set_page_config(page_title="Professional Portfolio Analysis", layout="wide")
 
-# --- FUNZIONE MARGINI IBKR ---
+# --- 1. RECUPERO MARGINI LIVE ---
 @st.cache_data(ttl=3600)
 def get_ibkr_margins(url):
     try:
@@ -26,13 +26,13 @@ def get_ibkr_margins(url):
         return margin_dict
     except: return {}
 
-st.markdown("# 📈 Analisi Margine Reale con Netting (Dati Titan)")
+st.markdown("# 📈 Analisi Professionale Portafoglio Titan")
 
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
-with st.spinner('Aggiornamento margini IBKR...'):
+with st.spinner('Sincronizzazione margini con IBKR...'):
     live_margins = get_ibkr_margins(url_ibkr)
 
-uploaded_files = st.file_uploader("Carica i file TXT di Titan", type="txt", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Carica file Titan (.txt)", type="txt", accept_multiple_files=True)
 
 if uploaded_files:
     raw_data = {}
@@ -48,12 +48,10 @@ if uploaded_files:
                     data.append({
                         'date': datetime.strptime(parts[0], '%d/%m/%Y'), 
                         'pnl': float(parts[1]),
-                        'pos': int(float(parts[2]))  # Legge il campo 1, -1 o 0
+                        'pos': int(float(parts[2]))
                     })
             return pd.DataFrame(data).sort_values('date')
-        except Exception as e:
-            st.error(f"Errore nel file {uploaded_file.name}: {e}")
-            return None
+        except: return None
 
     for f in uploaded_files:
         name = f.name.replace('.txt', '').replace('#', '').strip()
@@ -65,71 +63,103 @@ if uploaded_files:
     if raw_data:
         selected_names = []
         ticker_map = {}
-        
-        st.write("### 🛠️ Strategie Selezionate")
+        ticker_attivi_margini = {}
+
+        # --- 2. SELEZIONE STRATEGIE E MAPPATURA MARGINI ---
+        st.write("### 🛠️ Strategie in Analisi")
         cols = st.columns(min(len(raw_data), 4))
         for i, name in enumerate(sorted(raw_data.keys())):
             ticker = name.split('_')[0].upper().strip()
             ticker_map[name] = ticker
+            m_unitario = live_margins.get(ticker, 0.0)
+            
             with cols[i % 4]:
-                if st.checkbox(name, value=True, key=name):
+                if st.checkbox(f"{name}", value=True, key=name):
                     selected_names.append(name)
+                    if m_unitario > 0:
+                        ticker_attivi_margini[ticker] = m_unitario
 
         if selected_names:
+            # --- 3. ELABORAZIONE DATI (NETTING & EQUITY) ---
             dates_set = sorted(list(set(all_dates)))
             df_master = pd.DataFrame({'date': dates_set})
-            
-            # Calcolo esposizione netta giornaliera per ogni asset
             net_exposure = {d: {} for d in dates_set}
-            total_pnl = pd.Series(0.0, index=dates_set)
-
+            
+            # Per visualizzare le equity singole
             for name in selected_names:
                 ticker = ticker_map[name]
-                temp_df = raw_data[name].set_index('date')
+                temp_df = raw_data[name].copy().rename(columns={'pnl': f'pnl_{name}'}).set_index('date')
+                df_master = df_master.merge(temp_df[[f'pnl_{name}', 'pos']], on='date', how='left').fillna(0)
                 
-                for d, row in temp_df.iterrows():
-                    if d in net_exposure:
-                        # Usiamo il valore reale del campo posizione (1, -1, 0)
-                        net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + row['pos']
+                # Calcolo posizione netta per asset
+                for d in dates_set:
+                    pos_val = df_master.loc[df_master['date'] == d, 'pos'].values[0]
+                    net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + pos_val
                 
-                total_pnl = total_pnl.add(temp_df['pnl'], fill_value=0)
+                # Creazione Equity Cumulata Singola
+                df_master[f'eq_{name}'] = df_master[f'pnl_{name}'].cumsum()
+                df_master.drop('pos', axis=1, inplace=True)
 
-            # Calcolo Margine Reale Applicando il Netting
+            # Calcolo Margine Reale Giornaliero
             m_giornaliero = []
             for d in dates_set:
-                day_margin = 0
-                for t, pos_netta in net_exposure[d].items():
-                    # Il margine si paga sul valore assoluto della posizione netta finale
-                    # Se pos_netta è 0 (hedging perfetto), il margine è 0
-                    day_margin += abs(pos_netta) * live_margins.get(t, 0)
-                m_giornaliero.append(day_margin)
-
+                day_m = sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items())
+                m_giornaliero.append(day_m)
+            
             df_master['Margine_Reale'] = m_giornaliero
-            df_master['Equity'] = total_pnl.cumsum().values
-            df_master['DD'] = df_master['Equity'] - df_master['Equity'].cummax()
+            pnl_cols = [f'pnl_{n}' for n in selected_names]
+            df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
+            df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
 
-            # --- SIDEBAR METRICHE ---
+            # --- 4. METRICHE PROFESSIONALI NELLA SIDEBAR ---
             max_m = df_master['Margine_Reale'].max()
             max_dd = abs(df_master['DD'].min())
-            capitale_necessario = max_m + max_dd
-
-            st.sidebar.header("🛡️ Gestione Rischio")
+            
+            capitale_minimo = max_m + max_dd
+            capitale_prudenziale = max_m + (max_dd * 1.5) # Metodo professionale 1.5x DD
+            
+            st.sidebar.header("💰 Gestione Capitale")
             st.sidebar.metric("Picco Margine Netto", f"${max_m:,.0f}")
-            st.sidebar.metric("Max Drawdown Storico", f"${max_dd:,.0f}")
-            st.sidebar.success(f"**Capitale Reale: ${capitale_necessario:,.0f}**")
-            st.sidebar.caption("Basato sulla posizione netta reale (Long/Short/Flat) estratta dai file.")
+            st.sidebar.metric("Max Drawdown Storico", f"-${max_dd:,.0f}")
+            
+            st.sidebar.subheader("Allocazione Suggerita")
+            st.sidebar.info(f"**Capitale Minimo:** ${capitale_minimo:,.0f}\n\n**Capitale Prudenziale:** ${capitale_prudenziale:,.0f}")
 
-            # --- GRAFICI ---
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                               subplot_titles=("Equity Cumulata", "Margine Reale Impegnato ($)"))
+            # Tabella Margini Rilevati
+            if ticker_attivi_margini:
+                st.sidebar.write("---")
+                st.sidebar.subheader("📌 Margini IBKR Rilevati")
+                df_m_info = pd.DataFrame([{"Strumento": k, "Margine ($)": v} for k, v in ticker_attivi_margini.items()])
+                st.sidebar.table(df_m_info.style.format({"Margine ($)": "{:,.2f}"}))
+
+            # --- 5. GRAFICO PROFESSIONALE ---
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
+                               row_heights=[0.7, 0.3],
+                               subplot_titles=("Equity Line (Totale e Singole)", "Impegno Margine Reale ($)"))
             
-            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity'], name="Equity", line=dict(color="black")), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Margine_Reale'], name="Margine", fill='tozeroy', line=dict(color="orange")), row=2, col=1)
+            # Linea Totale (Nera)
+            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], 
+                                     name='PORTAFOGLIO', line=dict(color='black', width=4)), row=1, col=1)
             
-            fig.update_layout(height=800, template="plotly_white", showlegend=False)
+            # Linee Singole (Sottili)
+            for name in selected_names:
+                fig.add_trace(go.Scatter(x=df_master['date'], y=df_master[f'eq_{name}'], 
+                                         name=name, line=dict(width=1.5), opacity=0.5), row=1, col=1)
+            
+            # Area Margine
+            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Margine_Reale'], 
+                                     name='Margine Reale', fill='tozeroy', line=dict(color='orange')), row=2, col=1)
+            
+            fig.update_layout(height=850, template="plotly_white", hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
+
+            # --- 6. TABELLA PERFORMANCE ANNUALE ---
+            st.write("### 📊 Tabella Performance e ROE")
+            df_master['Year'] = df_master['date'].dt.year
+            res = df_master.groupby('Year')[pnl_cols].sum().round(0)
+            res['PnL Totale'] = res.sum(axis=1)
             
-            # Tabella di verifica
-            with st.expander("Vedi log posizioni nette per giorno"):
-                check_df = pd.DataFrame([{'Data': d, 'Margine': m} for d, m in zip(dates_set, m_giornaliero)])
-                st.dataframe(check_df.sort_values('Margine', ascending=False).head(20))
+            if capitale_prudenziale > 0:
+                res['ROE % (su Prudenziale)'] = (res['PnL Totale'] / capitale_prudenziale * 100).round(2)
+            
+            st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
