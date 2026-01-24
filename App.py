@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
 from datetime import datetime
 
 # Configurazione Pagina
@@ -71,6 +73,14 @@ if uploaded_files:
         df_port[pnl_columns] = df_port[pnl_columns].fillna(0)
         df_port[equity_columns] = df_port[equity_columns].ffill().fillna(0)
 
+        # Calcolo Equity Totale (Somma delle singole equity)
+        df_port['EQUITY_TOTALE'] = df_port[equity_columns].sum(axis=1)
+
+        # Calcolo Drawdown sull'Equity Totale
+        rolling_max = df_port['EQUITY_TOTALE'].cummax()
+        # Evitiamo divisioni per zero se l'equity parte da zero
+        df_port['drawdown'] = (df_port['EQUITY_TOTALE'] - rolling_max)
+
         # Calcolo PnL Annuale
         df_port['Year'] = df_port['date'].dt.year
         years = sorted(df_port['Year'].unique())
@@ -85,8 +95,9 @@ if uploaded_files:
         totale_storico = annual_pnl.sum().rename('TOTALE STORICO')
         annual_pnl_with_total = pd.concat([annual_pnl, totale_storico.to_frame().T])
 
-        # GRAFICO
-        st.subheader("Grafico delle Equity")
+        # GRAFICI (Equity + Drawdown)
+        st.subheader("Analisi Grafica")
+        
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             start_d = st.date_input("Inizio", value=df_port['date'].min())
@@ -96,16 +107,30 @@ if uploaded_files:
         mask = (df_port['date'].dt.date >= start_d) & (df_port['date'].dt.date <= end_d)
         df_plot = df_port.loc[mask]
 
-        fig = go.Figure()
-        total_equity_line = df_plot[equity_columns].sum(axis=1)
-        fig.add_trace(go.Scatter(x=df_plot['date'], y=total_equity_line, name='EQUITY_TOTALE', line=dict(color='white', width=3)))
+        # Creazione Subplots: uno per l'Equity, uno per il Drawdown
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                           vertical_spacing=0.05, row_heights=[0.7, 0.3],
+                           subplot_titles=("Equity Curves", "Portfolio Drawdown (€)"))
+
+        # 1. Equity Totale - COLORE LIME (Verde acceso)
+        fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['EQUITY_TOTALE'], 
+                                 name='EQUITY_TOTALE', 
+                                 line=dict(color='#00FF00', width=4)), row=1, col=1)
+
+        # 2. Singole Equity
         for col in equity_columns:
-            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[col], name=col))
-        
-        fig.update_layout(template="plotly_dark", height=600)
+            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[col], 
+                                     name=col, line=dict(width=1.5), opacity=0.6), row=1, col=1)
+
+        # 3. Drawdown Totale (Area Rossa)
+        fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['drawdown'], 
+                                 name='Drawdown Totale', fill='tozeroy',
+                                 line=dict(color='red', width=1)), row=2, col=1)
+
+        fig.update_layout(template="plotly_dark", height=800, showlegend=True, hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
-        # TABELLA
+        # TABELLA PnL
         st.markdown("### PnL netto prodotto anno per anno (non cumulativo)")
         
         def style_df(df):
@@ -115,8 +140,7 @@ if uploaded_files:
                 return [''] * len(row)
             return df.style.apply(make_pretty, axis=1).format("{:,}")
 
-        # Questa riga ora è allineata correttamente
         st.table(style_df(annual_pnl_with_total))
 
 else:
-    st.info("Trascina i file .txt per iniziare.")
+    st.info("Trascina i file .txt per iniziare l'analisi del portafoglio.")
