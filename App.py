@@ -5,8 +5,9 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import requests
 
-st.set_page_config(page_title="Margine Reale Asset-Based", layout="wide")
+st.set_page_config(page_title="Netting Professionale Titan", layout="wide")
 
+# --- FUNZIONE MARGINI IBKR ---
 @st.cache_data(ttl=3600)
 def get_ibkr_margins(url):
     try:
@@ -25,13 +26,13 @@ def get_ibkr_margins(url):
         return margin_dict
     except: return {}
 
-st.markdown("# 📈 Calcolo Margine Reale per Asset")
+st.markdown("# 📈 Analisi Margine Reale con Netting (Dati Titan)")
 
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
-with st.spinner('Lettura margini IBKR...'):
+with st.spinner('Aggiornamento margini IBKR...'):
     live_margins = get_ibkr_margins(url_ibkr)
 
-uploaded_files = st.file_uploader("Carica file Titan", type="txt", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Carica i file TXT di Titan", type="txt", accept_multiple_files=True)
 
 if uploaded_files:
     raw_data = {}
@@ -43,10 +44,16 @@ if uploaded_files:
             data = []
             for line in content.splitlines():
                 parts = line.strip().split()
-                if len(parts) == 6:
-                    data.append({'date': datetime.strptime(parts[0], '%d/%m/%Y'), 'pnl': float(parts[1])})
+                if len(parts) >= 3:
+                    data.append({
+                        'date': datetime.strptime(parts[0], '%d/%m/%Y'), 
+                        'pnl': float(parts[1]),
+                        'pos': int(float(parts[2]))  # Legge il campo 1, -1 o 0
+                    })
             return pd.DataFrame(data).sort_values('date')
-        except: return None
+        except Exception as e:
+            st.error(f"Errore nel file {uploaded_file.name}: {e}")
+            return None
 
     for f in uploaded_files:
         name = f.name.replace('.txt', '').replace('#', '').strip()
@@ -59,20 +66,20 @@ if uploaded_files:
         selected_names = []
         ticker_map = {}
         
-        st.write("### 🛠️ Selezione Strategie")
+        st.write("### 🛠️ Strategie Selezionate")
         cols = st.columns(min(len(raw_data), 4))
         for i, name in enumerate(sorted(raw_data.keys())):
             ticker = name.split('_')[0].upper().strip()
             ticker_map[name] = ticker
             with cols[i % 4]:
-                if st.checkbox(name, value=True):
+                if st.checkbox(name, value=True, key=name):
                     selected_names.append(name)
 
         if selected_names:
             dates_set = sorted(list(set(all_dates)))
             df_master = pd.DataFrame({'date': dates_set})
             
-            # Struttura per il calcolo netto: { data: { ticker: posizione_netta } }
+            # Calcolo esposizione netta giornaliera per ogni asset
             net_exposure = {d: {} for d in dates_set}
             total_pnl = pd.Series(0.0, index=dates_set)
 
@@ -82,50 +89,47 @@ if uploaded_files:
                 
                 for d, row in temp_df.iterrows():
                     if d in net_exposure:
-                        # Determiniamo la direzione dal PnL
-                        # Se PnL > 0 assume Long (+1), se < 0 assume Short (-1)
-                        direction = 1 if row['pnl'] > 0 else (-1 if row['pnl'] < 0 else 0)
-                        net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + direction
+                        # Usiamo il valore reale del campo posizione (1, -1, 0)
+                        net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + row['pos']
                 
                 total_pnl = total_pnl.add(temp_df['pnl'], fill_value=0)
 
-            # CALCOLO MARGINE REALE
-            # Se hai 1 Long e 1 Short sullo stesso ticker, il margine è 0.
-            # Se hai solo una delle due attiva, il margine è quello di 1 contratto.
+            # Calcolo Margine Reale Applicando il Netting
             m_giornaliero = []
             for d in dates_set:
-                day_m = 0
-                for t, pos in net_exposure[d].items():
-                    # Usiamo il valore assoluto della posizione netta (Netting)
-                    day_m += abs(pos) * live_margins.get(t, 0)
-                m_giornaliero.append(day_m)
+                day_margin = 0
+                for t, pos_netta in net_exposure[d].items():
+                    # Il margine si paga sul valore assoluto della posizione netta finale
+                    # Se pos_netta è 0 (hedging perfetto), il margine è 0
+                    day_margin += abs(pos_netta) * live_margins.get(t, 0)
+                m_giornaliero.append(day_margin)
 
             df_master['Margine_Reale'] = m_giornaliero
             df_master['Equity'] = total_pnl.cumsum().values
             df_master['DD'] = df_master['Equity'] - df_master['Equity'].cummax()
 
-            # Metriche Dashboard
+            # --- SIDEBAR METRICHE ---
             max_m = df_master['Margine_Reale'].max()
             max_dd = abs(df_master['DD'].min())
-            
-            st.sidebar.header("🛡️ Gestione del Capitale")
-            st.sidebar.metric("Picco Margine Netto", f"${max_m:,.0f}")
-            st.sidebar.metric("Max Drawdown", f"${max_dd:,.0f}")
-            
-            capitale_reale = max_m + max_dd
-            st.sidebar.success(f"**Capitale Necessario: ${capitale_reale:,.0f}**")
-            
-            st.sidebar.write("---")
-            st.sidebar.write("**Logica applicata:**")
-            st.sidebar.caption("1. Netting Long/Short sullo stesso asset.")
-            st.sidebar.caption("2. Margine calcolato solo sulla posizione netta aperta.")
+            capitale_necessario = max_m + max_dd
 
-            # Grafici
+            st.sidebar.header("🛡️ Gestione Rischio")
+            st.sidebar.metric("Picco Margine Netto", f"${max_m:,.0f}")
+            st.sidebar.metric("Max Drawdown Storico", f"${max_dd:,.0f}")
+            st.sidebar.success(f"**Capitale Reale: ${capitale_necessario:,.0f}**")
+            st.sidebar.caption("Basato sulla posizione netta reale (Long/Short/Flat) estratta dai file.")
+
+            # --- GRAFICI ---
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                               subplot_titles=("Equity Line Portafoglio", "Impegno Margine Reale ($)"))
+                               subplot_titles=("Equity Cumulata", "Margine Reale Impegnato ($)"))
             
-            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity'], name="Equity", line=dict(color="#2ca02c")), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Margine_Reale'], name="Margine", fill='tozeroy', line=dict(color="#1f77b4")), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity'], name="Equity", line=dict(color="black")), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Margine_Reale'], name="Margine", fill='tozeroy', line=dict(color="orange")), row=2, col=1)
             
-            fig.update_layout(height=800, template="plotly_white")
+            fig.update_layout(height=800, template="plotly_white", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Tabella di verifica
+            with st.expander("Vedi log posizioni nette per giorno"):
+                check_df = pd.DataFrame([{'Data': d, 'Margine': m} for d, m in zip(dates_set, m_giornaliero)])
+                st.dataframe(check_df.sort_values('Margine', ascending=False).head(20))
