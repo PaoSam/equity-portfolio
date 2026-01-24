@@ -4,12 +4,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-# Configurazione Pagina
-st.set_page_config(page_title="Equity Portfolio Interattivo", layout="wide")
+st.set_page_config(page_title="Equity Portfolio Paolo", layout="wide")
 
-# =============================================
-# FUNZIONE CARICAMENTO DATI
-# =============================================
 def load_equity(uploaded_file):
     data = []
     try:
@@ -21,131 +17,87 @@ def load_equity(uploaded_file):
                     date = datetime.strptime(parts[0], '%d/%m/%Y')
                     pnl = float(parts[1])
                     data.append({'date': date, 'pnl': pnl})
-                except:
-                    continue
-    except Exception as e:
-        st.error(f"Errore lettura {uploaded_file.name}: {e}")
-        return None
-
-    if not data:
-        return None
-
+                except: continue
+    except: return None
+    if not data: return None
     df = pd.DataFrame(data)
     df = df.groupby('date')['pnl'].sum().reset_index()
     df = df.sort_values('date')
     df['equity'] = df['pnl'].cumsum()
-    return df[['date', 'equity', 'pnl']]
+    return df
 
-# =============================================
-# INTERFACCIA STREAMLIT
-# =============================================
 st.markdown("### Equity Portfolio Interattivo – Paolo")
 
-uploaded_files = st.file_uploader("Carica i file TXT", type="txt", accept_multiple_files=True)
+uploaded_files = st.file_uploader("1. Carica i file TXT", type="txt", accept_multiple_files=True)
 
 if uploaded_files:
-    equity_dfs = {}
+    raw_data = {}
     all_dates = set()
-
-    for uploaded_file in uploaded_files:
-        df = load_equity(uploaded_file)
+    for f in uploaded_files:
+        name = f.name.replace('.txt', '').replace('#', '').strip()
+        df = load_equity(f)
         if df is not None:
-            # Pulizia nome file
-            clean_name = uploaded_file.name.replace('.txt', '').replace('#', '').strip()
-            equity_dfs[clean_name] = df
+            raw_data[name] = df
             all_dates.update(df['date'])
 
-    if not equity_dfs:
-        st.warning("Nessun dato valido estratto dai file.")
+    # --- SELEZIONE STRATEGIE (Sostituisce il click sulla legenda) ---
+    st.sidebar.header("Selezione Strategie")
+    selected_names = []
+    for name in raw_data.keys():
+        if st.sidebar.checkbox(name, value=True):
+            selected_names.append(name)
+
+    if not selected_names:
+        st.warning("Seleziona almeno una strategia dalla barra laterale.")
     else:
-        # --- SELETTORE DINAMICO STRATEGIE ---
-        st.sidebar.header("Filtri Portafoglio")
-        selected_strategies = st.sidebar.multiselect(
-            "Seleziona le strategie da includere nel Totale:",
-            options=list(equity_dfs.keys()),
-            default=list(equity_dfs.keys())
-        )
+        # Costruzione DataFrame filtrato
+        df_port = pd.DataFrame({'date': sorted(list(all_dates))})
+        for name in selected_names:
+            df = raw_data[name]
+            df_port = df_port.merge(df[['date', 'equity', 'pnl']].rename(
+                columns={'equity': name, 'pnl': name + '_pnl'}), on='date', how='left')
 
-        if not selected_strategies:
-            st.error("Seleziona almeno una strategia per vedere i calcoli.")
-        else:
-            # Creazione DataFrame base
-            df_port = pd.DataFrame({'date': sorted(list(all_dates))})
-            
-            for name in selected_strategies:
-                df = equity_dfs[name]
-                df_port = df_port.merge(
-                    df.rename(columns={'equity': name, 'pnl': name + '_pnl'}),
-                    on='date', how='left'
-                )
+        # Riempimento e calcoli dinamici
+        pnl_cols = [n + '_pnl' for n in selected_names]
+        df_port[selected_names] = df_port[selected_names].ffill().fillna(0)
+        df_port[pnl_cols] = df_port[pnl_cols].fillna(0)
+        
+        df_port['EQUITY_TOTALE'] = df_port[selected_names].sum(axis=1)
+        df_port['drawdown'] = df_port['EQUITY_TOTALE'] - df_port['EQUITY_TOTALE'].cummax()
 
-            # Riempimento buchi
-            pnl_cols = [c + '_pnl' for c in selected_strategies]
-            df_port[pnl_cols] = df_port[pnl_cols].fillna(0)
-            df_port[selected_strategies] = df_port[selected_strategies].ffill().fillna(0)
+        # Filtro Date
+        col_d1, col_d2 = st.columns(2)
+        start_d = col_d1.date_input("Inizio", df_port['date'].min())
+        end_d = col_d2.date_input("Fine", df_port['date'].max())
+        df_plot = df_port[(df_port['date'].dt.date >= start_d) & (df_port['date'].dt.date <= end_d)]
 
-            # --- RICALCOLO DINAMICO EQUITY E DRAWDOWN ---
-            df_port['EQUITY_TOTALE'] = df_port[selected_strategies].sum(axis=1)
-            
-            # Calcolo Drawdown Dinamico
-            rolling_max = df_port['EQUITY_TOTALE'].cummax()
-            df_port['drawdown'] = df_port['EQUITY_TOTALE'] - rolling_max
+        # Grafici
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
+                           row_heights=[0.7, 0.3], subplot_titles=("Equity Curves", "Drawdown Totale (€)"))
+        
+        # Equity Totale LIME
+        fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['EQUITY_TOTALE'], 
+                                 name='TOTALE', line=dict(color='#00FF00', width=4)), row=1, col=1)
+        
+        for n in selected_names:
+            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[n], name=n, line=dict(width=1.5)), row=1, col=1)
+        
+        fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['drawdown'], name='Drawdown', 
+                                 fill='tozeroy', line=dict(color='red')), row=2, col=1)
 
-            # --- GRAFICI ---
-            st.subheader("Analisi Grafica Dinamica")
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                start_d = st.date_input("Inizio", value=df_port['date'].min())
-            with col_d2:
-                end_d = st.date_input("Fine", value=df_port['date'].max())
+        fig.update_layout(template="plotly_dark", height=700, hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
 
-            mask = (df_port['date'].dt.date >= start_d) & (df_port['date'].dt.date <= end_d)
-            df_plot = df_port.loc[mask]
+        # Tabella PnL Annuale
+        st.markdown("### PnL Netto Anno per Anno")
+        df_port['Year'] = df_port['date'].dt.year
+        annual_pnl = pd.DataFrame()
+        for n in selected_names:
+            annual_pnl[n + ' PnL'] = df_port.groupby('Year')[n + '_pnl'].sum().round(0).astype(int)
+        
+        annual_pnl['Equity_Totale PnL'] = annual_pnl.sum(axis=1).astype(int)
+        totale_storico = annual_pnl.sum().rename('TOTALE STORICO')
+        annual_pnl_with_total = pd.concat([annual_pnl, totale_storico.to_frame().T])
 
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                               vertical_spacing=0.05, row_heights=[0.7, 0.3],
-                               subplot_titles=("Equity Curves", "Portfolio Drawdown (€)"))
-
-            # Equity Totale LIME
-            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['EQUITY_TOTALE'], 
-                                     name='EQUITY_TOTALE', 
-                                     line=dict(color='#00FF00', width=4)), row=1, col=1)
-
-            # Singole Equity selezionate
-            for col in selected_strategies:
-                fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[col], 
-                                         name=col, line=dict(width=1.5), opacity=0.5), row=1, col=1)
-
-            # Drawdown dinamico
-            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['drawdown'], 
-                                     name='Drawdown Totale', fill='tozeroy',
-                                     line=dict(color='red', width=1)), row=2, col=1)
-
-            fig.update_layout(template="plotly_dark", height=800, hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
-            # --- TABELLA PnL ANNUALE ---
-            st.markdown("### PnL netto prodotto anno per anno")
-            df_port['Year'] = df_port['date'].dt.year
-            annual_pnl = pd.DataFrame()
-
-            for col in selected_strategies:
-                pnl_col_name = col + '_pnl'
-                yearly_pnl = df_port.groupby('Year')[pnl_col_name].sum().round(0).astype(int)
-                annual_pnl[col + ' PnL'] = yearly_pnl
-
-            annual_pnl['Equity_Totale PnL'] = annual_pnl.sum(axis=1).astype(int)
-            totale_storico = annual_pnl.sum().rename('TOTALE STORICO')
-            annual_pnl_with_total = pd.concat([annual_pnl, totale_storico.to_frame().T])
-
-            def style_df(df):
-                def make_pretty(row):
-                    if row.name == 'TOTALE STORICO':
-                        return ['background-color: #d1e7dd; color: black; font-weight: bold'] * len(row)
-                    return [''] * len(row)
-                return df.style.apply(make_pretty, axis=1).format("{:,}")
-
-            st.table(style_df(annual_pnl_with_total))
-
-else:
-    st.info("Trascina i file .txt per iniziare.")
+        st.table(annual_pnl_with_total.style.apply(lambda x: ['background-color: #d1e7dd; color: black' 
+                if x.name == 'TOTALE STORICO' else '' for _ in x], axis=1).format("{:,}"))
