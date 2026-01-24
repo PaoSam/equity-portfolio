@@ -26,7 +26,7 @@ def load_equity(uploaded_file):
     df['equity'] = df['pnl'].cumsum()
     return df
 
-st.markdown("### 📈 Equity Portfolio – Visualizzazione Professionale")
+st.markdown("### 📈 Equity Portfolio – Pro Mode")
 
 uploaded_files = st.file_uploader("Carica i file TXT", type="txt", accept_multiple_files=True)
 
@@ -40,16 +40,18 @@ if uploaded_files:
             raw_data[name] = df
             all_dates.update(df['date'])
 
-    # Checkbox posizionate in alto per ricalcolo istantaneo
-    st.write("#### Seleziona Strategie:")
-    cols_check = st.columns(max(len(raw_data), 1))
+    # --- SELEZIONE STRATEGIE (Dinamica) ---
+    st.write("#### Seleziona/Deseleziona Strategie:")
     selected_names = []
+    # Usiamo un container per le checkbox orizzontali
+    chk_cols = st.columns(min(len(raw_data), 4))
     for i, name in enumerate(sorted(raw_data.keys())):
-        with cols_check[i % len(cols_check)]:
-            if st.checkbox(name, value=True):
+        with chk_cols[i % 4]:
+            if st.checkbox(name, value=True, key=name):
                 selected_names.append(name)
 
     if selected_names:
+        # Costruzione dataframe
         df_port = pd.DataFrame({'date': sorted(list(all_dates))})
         for name in selected_names:
             df = raw_data[name]
@@ -60,55 +62,56 @@ if uploaded_files:
         pnl_cols = [n + '_pnl' for n in selected_names]
         df_port[pnl_cols] = df_port[pnl_cols].fillna(0)
         
+        # Calcolo Equity Totale e Drawdown basato SOLO sui selezionati
         df_port['EQUITY_TOTALE'] = df_port[selected_names].sum(axis=1)
         df_port['drawdown'] = df_port['EQUITY_TOTALE'] - df_port['EQUITY_TOTALE'].cummax()
 
-        # Filtro date per ricalcolo scala
-        c1, c2 = st.columns(2)
-        start_d = c1.date_input("Inizio", df_port['date'].min())
-        end_d = c2.date_input("Fine", df_port['date'].max())
+        # Filtro date (Barra laterale per non ingombrare)
+        st.sidebar.header("Range Temporale")
+        start_d = st.sidebar.date_input("Inizio", df_port['date'].min())
+        end_d = st.sidebar.date_input("Fine", df_port['date'].max())
         
-        df_plot = df_port[(df_port['date'].dt.date >= start_d) & (df_port['date'].dt.date <= end_d)].copy()
+        mask = (df_port['date'].dt.date >= start_d) & (df_port['date'].dt.date <= end_d)
+        df_plot = df_port[mask].copy()
 
-        # --- CREAZIONE GRAFICO STILE COLAB ---
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, 
-                           row_heights=[0.75, 0.25])
+        # --- GRAFICO (Stile Colab con Auto-Scale) ---
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
+                           row_heights=[0.7, 0.3])
 
-        # Equity Totale (Nera e spessa come in foto)
+        # Equity Totale (Nero, Spessore 3)
         fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['EQUITY_TOTALE'], 
                                  name='Equity Totale', line=dict(color='black', width=3)), row=1, col=1)
         
-        # Colori per le singole strategie (Cyan e Arancio come in foto)
-        colors = ['#00FFFF', '#FFA500', '#00FF00', '#FF00FF']
-        for i, n in enumerate(selected_names):
-            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[n], name=n, 
-                                     line=dict(width=1.2, color=colors[i % len(colors)])), row=1, col=1)
+        # Strategie singole
+        for n in selected_names:
+            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[n], name=n, line=dict(width=1)), row=1, col=1)
         
-        # Drawdown (Rosso con riempimento come in foto)
+        # Drawdown
         fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['drawdown'], name='Drawdown', 
-                                 fill='tozeroy', fillcolor='rgba(255, 0, 0, 0.1)',
-                                 line=dict(color='red', width=1.5)), row=2, col=1)
+                                 fill='tozeroy', fillcolor='rgba(255, 0, 0, 0.2)',
+                                 line=dict(color='red', width=1)), row=2, col=1)
 
-        # --- SETTAGGI PER EVITARE L'APPIATTIMENTO ---
-        fig.update_yaxes(autorange=True, fixedrange=False, gridcolor='lightgrey', gridwidth=0.5, griddash='dot', row=1, col=1)
-        fig.update_yaxes(autorange=True, fixedrange=False, gridcolor='lightgrey', gridwidth=0.5, griddash='dot', row=2, col=1)
-        fig.update_xaxes(gridcolor='lightgrey', gridwidth=0.5, griddash='dot')
+        # --- IL TRUCCO PER NON AVERE L'EFFETTO PIATTO ---
+        # Impostiamo autorange="reversed" se necessario, ma soprattutto uirevision per mantenere lo zoom
+        fig.update_yaxes(autorange=True, fixedrange=False, gridcolor='rgba(200,200,200,0.3)', row=1, col=1)
+        fig.update_yaxes(autorange=True, fixedrange=False, gridcolor='rgba(200,200,200,0.3)', row=2, col=1)
+        fig.update_xaxes(gridcolor='rgba(200,200,200,0.3)')
 
         fig.update_layout(
             plot_bgcolor='white',
             paper_bgcolor='white',
-            font=dict(color='black'),
             height=800,
-            margin=dict(l=50, r=50, t=30, b=50),
+            margin=dict(l=10, r=10, t=10, b=10),
             hovermode="x unified",
-            legend=dict(bgcolor="rgba(255,255,255,0.8)", bordercolor="Black", borderwidth=1)
+            uirevision='constant', # Mantiene lo zoom quando cambi le checkbox!
+            showlegend=True
         )
         
         st.plotly_chart(fig, use_container_width=True)
 
-        # Tabella PnL
+        # Tabella PnL (Replica fedele)
         st.write("### PnL Netto Anno per Anno")
-        df_port['Year'] = df_port['date'].dt.year
+        df_plot['Year'] = df_plot['date'].dt.year
         annual_pnl = pd.DataFrame()
         for n in selected_names:
             annual_pnl[n + ' PnL'] = df_plot.groupby('Year')[n + '_pnl'].sum().round(0).astype(int)
@@ -117,5 +120,5 @@ if uploaded_files:
         totale_storico = annual_pnl.sum().rename('TOTALE STORICO')
         annual_pnl_with_total = pd.concat([annual_pnl, totale_storico.to_frame().T])
 
-        st.table(annual_pnl_with_total.style.apply(lambda x: ['background-color: #f0f0f0; font-weight: bold' 
+        st.table(annual_pnl_with_total.style.apply(lambda x: ['background-color: #d1e7dd; color: black; font-weight: bold' 
                 if x.name == 'TOTALE STORICO' else '' for _ in x], axis=1).format("{:,}"))
