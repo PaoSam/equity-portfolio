@@ -1,211 +1,109 @@
-# app.py
-
 import streamlit as st
+import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
-import io
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Equity Portfolio Interattivo", layout="wide")
+# Configurazione Pagina
+st.set_page_config(page_title="Equity Portfolio Analyzer", layout="wide")
 
-COLORS = ['cyan', 'orange', 'lime', 'magenta', 'yellow', 'pink', 'lightblue', 'purple']
+st.title("📊 Equity Portfolio & Drawdown Analyzer")
+st.markdown("Analisi delle performance e del rischio basata su dati Yahoo Finance.")
 
-# ── Cache per non rileggere i file ad ogni interazione ──
-@st.cache_data
-def parse_txt_file(file_bytes: bytes, filename: str) -> pd.DataFrame | None:
-    try:
-        lines = file_bytes.decode('utf-8').splitlines()
-        data = []
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) == 6:
-                try:
-                    date = datetime.strptime(parts[0], '%d/%m/%Y')
-                    pnl = float(parts[1])
-                    data.append({'date': date, 'pnl': pnl})
-                except:
-                    continue
-        if not data:
-            return None
-        df = pd.DataFrame(data)
-        df = df.groupby('date')['pnl'].sum().reset_index()
-        df = df.sort_values('date')
-        df['equity'] = df['pnl'].cumsum()
-        return df[['date', 'equity', 'pnl']].rename(
-            columns={'equity': filename, 'pnl': f"{filename}_pnl"}
-        )
-    except:
-        return None
+# --- SIDEBAR PER INPUT ---
+st.sidebar.header("Impostazioni Portafoglio")
 
+# Input Ticker (separati da virgola)
+tickers_input = st.sidebar.text_input("Inserisci i Ticker (es: AAPL, MSFT, GOOGL, TSLA)", "AAPL, MSFT, GOOGL")
+tickers = [t.strip().upper() for t in tickers_input.split(",")]
 
-# =============================================================================
-# SIDEBAR - Upload
-# =============================================================================
-st.sidebar.title("Equity Portfolio")
-
-uploaded_files = st.sidebar.file_uploader(
-    "Carica i file .txt delle strategie",
-    type=["txt"],
-    accept_multiple_files=True,
-    help="Carica uno o più file nel formato atteso"
-)
-
-if not uploaded_files:
-    st.info("Carica almeno un file TXT per iniziare l'analisi.")
-    st.stop()
-
-# ── Parsing ────────────────────────────────────────────────────────────────
-equity_dfs = {}
-all_dates = set()
-
-for file in uploaded_files:
-    name = file.name.replace('.txt', '').replace('#', '').strip()
-    df = parse_txt_file(file.getvalue(), name)
-    if df is not None:
-        equity_dfs[name] = df
-        all_dates.update(df['date'])
-
-if not equity_dfs:
-    st.error("Nessun file ha prodotto dati validi. Controlla il formato.")
-    st.stop()
-
-# ── Dataframe unico ────────────────────────────────────────────────────────
-df_port = pd.DataFrame({'date': sorted(list(all_dates))})
-
-for name, df in equity_dfs.items():
-    df_port = df_port.merge(
-        df[['date', name, f"{name}_pnl"]],
-        on='date',
-        how='left'
-    )
-
-df_port[[c for c in df_port.columns if c not in ['date', 'Year']]] = \
-    df_port[[c for c in df_port.columns if c not in ['date', 'Year']]].ffill().fillna(0)
-
-for c in df_port.columns:
-    if c.endswith('_pnl'):
-        df_port[c] = df_port[c].fillna(0)
-
-df_port['Year'] = df_port['date'].dt.year
-
-# ── PnL annuale ────────────────────────────────────────────────────────────
-years = sorted(df_port['Year'].unique())
-annual_pnl = pd.DataFrame(index=years)
-
-for col in equity_dfs:
-    pnl_col = f"{col}_pnl"
-    annual_pnl[f"{col} PnL"] = df_port.groupby('Year')[pnl_col].sum().round(0).astype(int)
-
-annual_pnl['Equity_Totale PnL'] = annual_pnl.sum(axis=1).astype(int)
-
-totale = annual_pnl.sum().rename('TOTALE STORICO')
-annual_pnl = pd.concat([annual_pnl, totale.to_frame().T])
-
-st.subheader("PnL netto anno per anno (movimenti dell’anno)")
-st.markdown("*Equity_Totale PnL = somma dei PnL dell’anno delle strategie selezionate*")
-
-st.dataframe(
-    annual_pnl.style
-        .format('{:,.0f}')
-        .set_properties(**{'text-align': 'center'})
-        .apply(lambda row: ['background-color: #d1e7dd; font-weight:bold']*len(row)
-               if row.name == 'TOTALE STORICO' else ['']*len(row), axis=1),
-    use_container_width=True
-)
-
-# =============================================================================
-# GRAFICO INTERATTIVO
-# =============================================================================
-st.subheader("Equity curve + Drawdown")
-
-col1, col2 = st.columns([3,1])
-
+# Selezione Date
+col1, col2 = st.sidebar.columns(2)
 with col1:
-    min_date = df_port['date'].min().date()
-    max_date = df_port['date'].max().date()
-
-    start_date = st.date_input("Inizio periodo", min_date, min_value=min_date, max_value=max_date)
-    end_date   = st.date_input("Fine periodo",   max_date, min_value=min_date, max_value=max_date)
-
+    start_date = st.date_input("Data Inizio", datetime.now() - timedelta(days=365*2))
 with col2:
-    st.write("")  # spacer
-    show_total = st.checkbox("Mostra Equity Totale", value=True)
+    end_date = st.date_input("Data Fine", datetime.now())
 
-selected_strats = st.multiselect(
-    "Strategie da mostrare",
-    options=list(equity_dfs.keys()),
-    default=list(equity_dfs.keys()),
-    placeholder="Seleziona strategie..."
-)
+# Bottone per avviare l'analisi
+if st.sidebar.button("Genera Analisi"):
+    try:
+        # 1. Download Dati
+        with st.spinner('Scaricamento dati in corso...'):
+            data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
+        
+        if data.empty:
+            st.error("Nessun dato trovato per i ticker inseriti.")
+        else:
+            # 2. Calcoli Finanziari
+            # Rendimenti logaritmici e normalizzazione
+            returns = data.pct_change()
+            # Equity curve del portafoglio (equipesato)
+            portfolio_returns = returns.mean(axis=1)
+            equity_curve = (1 + portfolio_returns).cumprod()
+            
+            # Calcolo Drawdown
+            rolling_max = equity_curve.cummax()
+            drawdown = (equity_curve - rolling_max) / rolling_max
+            
+            # Pulizia dati per Plotly (previene l'errore ValueError)
+            equity_curve = equity_curve.fillna(1.0)
+            drawdown = drawdown.fillna(0.0)
 
-if not selected_strats:
-    st.warning("Seleziona almeno una strategia per vedere il grafico.")
-    st.stop()
+            # --- GRAFICO PLOTLY ---
+            fig = make_subplots(rows=2, cols=1, 
+                                shared_xaxes=True, 
+                                vertical_spacing=0.1,
+                                subplot_titles=("Equity Curve (Normalizzata)", "Drawdown (%)"),
+                                row_heights=[0.7, 0.3])
 
-# Filtra periodo
-mask = (df_port['date'].dt.date >= start_date) & (df_port['date'].dt.date <= end_date)
-df_plot = df_port.loc[mask].copy()
+            # Traccia Equity Curve
+            fig.add_trace(
+                go.Scatter(x=equity_curve.index, y=equity_curve, name="Portfolio Equity",
+                           line=dict(color='royalblue', width=2), fill='tozeroy'),
+                row=1, col=1
+            )
 
-if df_plot.empty:
-    st.error("Nessun dato nel periodo selezionato.")
-    st.stop()
+            # Traccia Drawdown
+            fig.add_trace(
+                go.Scatter(x=drawdown.index, y=drawdown * 100, name="Drawdown",
+                           line=dict(color='red', width=1), fill='tozeroy'),
+                row=2, col=1
+            )
 
-# Normalizza a 0 all'inizio del periodo
-for col in selected_strats:
-    initial = df_plot[col].iloc[0]
-    df_plot[col] = df_plot[col] - initial
+            # Update Layout (Sistemato per evitare errori)
+            fig.update_layout(
+                height=700,
+                showlegend=False,
+                title_text="Analisi Performance Portafoglio",
+                title_x=0.5,
+                template="plotly_white"
+            )
+            
+            fig.update_yaxes(title_text="Moltiplicatore", row=1, col=1)
+            fig.update_yaxes(title_text="Drawdown %", row=2, col=1)
 
-df_plot['Equity_Totale_Dynamic'] = df_plot[selected_strats].sum(axis=1)
+            # Visualizzazione Grafico
+            st.plotly_chart(fig, use_container_width=True)
 
-gain = df_plot['Equity_Totale_Dynamic'].iloc[-1]
-st.metric("Gain periodo selezionato", f"{gain:,.0f} $", delta_color="normal")
+            # --- METRICHE ---
+            st.subheader("Metriche Principali")
+            m1, m2, m3 = st.columns(3)
+            
+            total_return = (equity_curve.iloc[-1] - 1) * 100
+            max_drawdown = drawdown.min() * 100
+            volatility = portfolio_returns.std() * np.sqrt(252) * 100
 
-# Drawdown
-df_plot['Peak'] = df_plot['Equity_Totale_Dynamic'].cummax()
-df_plot['Drawdown'] = df_plot['Equity_Totale_Dynamic'] - df_plot['Peak']
+            m1.metric("Rendimento Totale", f"{total_return:.2f}%")
+            m2.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+            m3.metric("Volatilità Annualizzata", f"{volatility:.2f}%")
 
-# ── Plotly ────────────────────────────────────────────────────────────────
-fig = go.Figure()
+            # Visualizzazione dati grezzi
+            with st.expander("Visualizza Dati Storici"):
+                st.dataframe(data.tail(10))
 
-for i, col in enumerate(selected_strats):
-    fig.add_trace(go.Scatter(
-        x=df_plot['date'], y=df_plot[col],
-        name=col,
-        line=dict(color=COLORS[i % len(COLORS)]),
-        mode='lines'
-    ))
-
-if show_total:
-    fig.add_trace(go.Scatter(
-        x=df_plot['date'], y=df_plot['Equity_Totale_Dynamic'],
-        name='Equity Totale',
-        line=dict(color='black', width=3.5),
-        mode='lines'
-    ))
-
-fig.add_trace(go.Scatter(
-    x=df_plot['date'], y=df_plot['Drawdown'],
-    name='Drawdown',
-    line=dict(color='red'),
-    fill='tozeroy', fillcolor='rgba(255,0,0,0.1)',
-    yaxis='y2'
-))
-
-fig.update_layout(
-    title="Equity curve (normalizzata al periodo) + Drawdown",
-    xaxis_title="Data",
-    yaxis_title="Equity ($)",
-    yaxis2=dict(
-        title="Drawdown",
-        overlaying="y",
-        side="right",
-        showgrid=False,
-        titlefont=dict(color="red"),
-        tickfont=dict(color="red")
-    ),
-    hovermode="x unified",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    height=650
-)
-
-st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Si è verificato un errore: {e}")
+else:
+    st.info("Configura i ticker nella barra laterale e clicca su 'Genera Analisi'.")
