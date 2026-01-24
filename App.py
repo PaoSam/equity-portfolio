@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 
 # Configurazione Pagina
-st.set_page_config(page_title="Equity Portfolio Paolo - Fix Ticker", layout="wide")
+st.set_page_config(page_title="Equity Portfolio Paolo - Margini Puliti", layout="wide")
 
 # --- FUNZIONE PER LEGGERE I MARGINI LIVE DA IBKR ---
 @st.cache_data(ttl=3600)
@@ -16,7 +16,6 @@ def get_ibkr_margins(url):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         response = requests.get(url, headers=header, timeout=15)
-        # Necessario 'lxml' nel file requirements.txt
         tables = pd.read_html(response.text, flavor='lxml')
         
         margin_dict = {}
@@ -35,7 +34,7 @@ def get_ibkr_margins(url):
         st.error(f"Errore tecnico nella lettura IBKR: {e}")
         return {}
 
-st.markdown("# 📈 Analisi Equity e Dettaglio Margini (Fix Ticker)")
+st.markdown("# 📈 Analisi Equity e Margini")
 
 # Scraping Live
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
@@ -74,44 +73,39 @@ if uploaded_files:
     if raw_data:
         st.sidebar.header("💰 Analisi Margini Live")
         margine_totale = 0
-        dettaglio_strumenti = []
+        ticker_attivi = {} # Usato per il dettaglio pulito
 
         st.write("### 🛠️ Strategie Selezionate")
         selected_names = []
         cols = st.columns(min(len(raw_data), 4))
         
         for i, name in enumerate(sorted(raw_data.keys())):
-            # --- LOGICA CORRETTA: Estraiamo il ticker prima del carattere '_' ---
+            # Estrazione ticker prima del trattino
             ticker_estratto = name.split('_')[0].upper().strip()
-            
             m_val = live_margins.get(ticker_estratto, 0)
             
             with cols[i % 4]:
-                label = f"{name} (${m_val:,.0f})" if m_val > 0 else f"{name} (Ticker {ticker_estratto} non trovato)"
+                label = f"{name} (${m_val:,.0f})" if m_val > 0 else f"{name} (?)"
                 if st.checkbox(label, value=True, key=name):
                     selected_names.append(name)
                     margine_totale += m_val
                     if m_val > 0:
-                        dettaglio_strumenti.append({
-                            "Strategia": name,
-                            "Ticker": ticker_estratto,
-                            "Margine ($)": m_val
-                        })
+                        ticker_attivi[ticker_estratto] = m_val
 
         if selected_names:
+            # --- SIDEBAR PULITA ---
             st.sidebar.metric("Margine Totale Portafoglio", f"${margine_totale:,.2f}")
             
-            if dettaglio_strumenti:
+            if ticker_attivi:
                 st.sidebar.write("---")
-                st.sidebar.subheader("📌 Dettaglio Margini")
-                df_dettaglio = pd.DataFrame(dettaglio_strumenti)
-                st.sidebar.dataframe(
-                    df_dettaglio.style.format({"Margine ($)": "{:,.2f}"}),
-                    hide_index=True,
-                    use_container_width=True
-                )
+                st.sidebar.subheader("📌 Margini per Strumento")
+                # Creazione dataframe pulito solo con Ticker e Margine
+                df_dettaglio = pd.DataFrame([
+                    {"Ticker": k, "Margine ($)": v} for k, v in ticker_attivi.items()
+                ])
+                st.sidebar.table(df_dettaglio.style.format({"Margine ($)": "{:,.2f}"}))
 
-            # --- ELABORAZIONE GRAFICO ---
+            # --- ELABORAZIONE DATI ---
             dates_set = sorted(list(set(all_dates)))
             df_port = pd.DataFrame({'date': dates_set})
             for name in selected_names:
@@ -129,14 +123,16 @@ if uploaded_files:
             df_plot['TOTALE'] = df_plot[selected_names].sum(axis=1)
             df_plot['DD'] = df_plot['TOTALE'] - df_plot['TOTALE'].cummax()
 
+            # Grafico
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
-            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['TOTALE'], name='TOTAL EQUITY', line=dict(color='black', width=3)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['TOTALE'], name='TOTAL', line=dict(color='black', width=3)), row=1, col=1)
             for n in selected_names:
                 fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot[n], name=n, line=dict(width=1), opacity=0.3), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['DD'], name='Drawdown', fill='tozeroy', line=dict(color='red')), row=2, col=1)
-            fig.update_layout(plot_bgcolor='white', height=750, hovermode="x unified")
+            fig.update_layout(plot_bgcolor='white', height=700, hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
+            # Tabella ROE
             st.write("### 📊 Risultati Annuali & ROE Live")
             df_plot['Year'] = df_plot['date'].dt.year
             res = df_plot.groupby('Year')[[n + '_pnl' for n in selected_names]].sum().round(0)
