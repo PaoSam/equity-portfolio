@@ -100,21 +100,19 @@ if uploaded_files:
                 temp_df = raw_data[name].copy().rename(columns={'pnl': f'pnl_{name}', 'pos': f'pos_{name}'})
                 df_master = df_master.merge(temp_df[['date', f'pnl_{name}', f'pos_{name}']], on='date', how='left').fillna(0)
                 
-                # --- CALCOLO EQUITY SINGOLA ---
+                # Equity singola per grafico
                 df_master[f'eq_{name}'] = df_master[f'pnl_{name}'].cumsum()
                 
-                # Calcolo Statistiche Trade e Rischio
+                # Statistiche
                 df_strat = temp_df[(temp_df['date'].dt.date >= start_date) & (temp_df['date'].dt.date <= end_date)].copy()
                 df_strat['is_active'] = df_strat[f'pos_{name}'] != 0
                 df_strat['trade_id'] = (df_strat['is_active'] != df_strat['is_active'].shift()).cumsum()
                 trades = df_strat[df_strat['is_active']].groupby('trade_id')[f'pnl_{name}'].sum()
                 
-                # Info per i tooltip del margine
                 for d in dates_set:
                     pos_val = df_master.loc[df_master['date'] == d, f'pos_{name}'].values[0]
                     if pos_val != 0:
-                        label = "L" if pos_val == 1 else "S"
-                        active_info[d].append(f"{name}({label})")
+                        active_info[d].append(f"{name}({'L' if pos_val==1 else 'S'})")
 
                 if not trades.empty:
                     wins = trades[trades > 0]
@@ -125,7 +123,6 @@ if uploaded_files:
                     max_dd_strat = abs((equity_curve - equity_curve.cummax()).min())
                     days = (end_date - start_date).days
                     cagr = (daily_returns.sum() / days * 365) if days > 0 else 0
-                    mar_ratio = (cagr / max_dd_strat) if max_dd_strat != 0 else 0
 
                     stats_list.append({
                         "Strategia": name,
@@ -133,71 +130,74 @@ if uploaded_files:
                         "Win Rate": f"{(len(wins)/len(trades)*100):.1f}%",
                         "Profit Factor": round(abs(wins.sum()/losses.sum()), 2) if losses.sum() != 0 else np.inf,
                         "Sharpe": round(sharpe, 2),
-                        "MAR": round(mar_ratio, 2),
+                        "MAR": round(cagr/max_dd_strat, 2) if max_dd_strat != 0 else 0,
                         "Avg Trade ($)": round(trades.mean(), 2)
                     })
 
-            # --- GRAFICI ---
+            # --- GRAFICI PRINCIPALI ---
             pnl_cols = [f'pnl_{n}' for n in selected_names]
             df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
             
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, 
-                               row_heights=[0.5, 0.25, 0.25],
-                               subplot_titles=("Equity Line (Nero=Totale, Colori=Singole)", "Drawdown Portafoglio ($)", "Margine Netto Reale ($)"))
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25],
+                               subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
             
-            # 1. Equity Totale
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], name='PORTAFOGLIO', line=dict(color='black', width=3.5)), row=1, col=1)
-            
-            # 2. Equity Singole (Ripristinate)
             for name in selected_names:
                 fig.add_trace(go.Scatter(x=df_master['date'], y=df_master[f'eq_{name}'], name=name, line=dict(width=1), opacity=0.35), row=1, col=1)
             
-            # 3. Drawdown
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['DD'], name='Drawdown', fill='tozeroy', line=dict(color='red')), row=2, col=1)
             
-            # 4. Margine con Netting
             net_exposure = {d: {t: 0 for t in strumenti_caricati} for d in dates_set}
             for name in selected_names:
                 for d in dates_set:
-                    val = df_master.loc[df_master['date']==d, f'pos_{name}'].values[0]
-                    net_exposure[d][ticker_map[name]] += val
-            
+                    net_exposure[d][ticker_map[name]] += df_master.loc[df_master['date']==d, f'pos_{name}'].values[0]
             m_giornaliero = [sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items()) for d in dates_set]
             
-            fig.add_trace(go.Scatter(
-                x=df_master['date'], y=m_giornaliero, name='Margine', fill='tozeroy', line=dict(color='orange'),
-                text=["<br>".join(active_info[d]) if active_info[d] else "Flat" for d in dates_set],
-                hovertemplate="Margine: $%{y:,.0f}<br>Strategie: %{text}<extra></extra>"
-            ), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df_master['date'], y=m_giornaliero, name='Margine', fill='tozeroy', line=dict(color='orange'),
+                                    text=["<br>".join(active_info[d]) for d in dates_set],
+                                    hovertemplate="Margine: $%{y:,.0f}<br>Strategie: %{text}<extra></extra>"), row=3, col=1)
             
             fig.update_layout(height=900, template="plotly_white", hovermode="x unified", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- STATISTICHE AVANZATE ---
+            # --- MATRICE DI CORRELAZIONE INGRANDITA ---
+            st.write("---")
+            st.write("### 🧬 Matrice di Correlazione (Dettaglio Avanzato)")
+            corr = df_master[pnl_cols].corr()
+            corr.columns = [c.replace('pnl_', '') for c in corr.columns]
+            corr.index = [c.replace('pnl_', '') for c in corr.index]
+            
+            fig_corr = px.imshow(
+                corr, 
+                text_auto=".2f", 
+                color_continuous_scale='RdBu_r', 
+                zmin=-1, zmax=1,
+                aspect="auto"
+            )
+            fig_corr.update_layout(
+                height=800, # Ingrandito sensibilmente
+                margin=dict(l=50, r=50, t=50, b=50),
+                xaxis_title="Strategia",
+                yaxis_title="Strategia"
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+            # --- STATISTICHE E PERFORMANCE ---
+            st.write("---")
             col1, col2 = st.columns([2, 1])
             with col1:
-                st.write("### 📊 Statistiche di Performance e Rischio")
+                st.write("### 📊 Performance Trade")
                 st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
-            
             with col2:
                 total_pnl = df_master[pnl_cols].sum().sum()
                 total_dd = abs(df_master['DD'].min())
                 days = (end_date - start_date).days
                 ann_return = (total_pnl / days * 365) if days > 0 else 0
-                total_mar = ann_return / total_dd if total_dd != 0 else 0
                 st.write("### 🏆 Portfolio Efficiency")
-                st.metric("MAR Ratio Totale", f"{total_mar:.2f}")
+                st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
-            # --- MATRICE CORRELAZIONE ---
-            st.write("### 🧬 Matrice di Correlazione")
-            corr = df_master[pnl_cols].corr()
-            corr.columns = [c.replace('pnl_', '') for c in corr.columns]
-            corr.index = [c.replace('pnl_', '') for c in corr.index]
-            st.plotly_chart(px.imshow(corr, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1), use_container_width=True)
-
-            # Risultati Annuali
             st.write("### 📅 Performance Annuale e ROE")
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
@@ -207,8 +207,8 @@ if uploaded_files:
             res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2)
             st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
 
-            # --- SIDEBAR RECAP ---
+            # SIDEBAR RECAP
             st.sidebar.write("---")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
-            st.sidebar.metric("Max Drawdown Portafoglio", f"-${max_dd:,.0f}")
+            st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_pru:,.0f}")
