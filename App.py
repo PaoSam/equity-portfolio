@@ -212,3 +212,49 @@ if uploaded_files:
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_pru:,.0f}")
+            import numpy as np
+
+st.write("---")
+st.write("### 🎲 Simulazione Monte Carlo (Proiezione 252 giorni)")
+
+# Parametri della simulazione
+n_simulazioni = 1000  # Quanti scenari generare
+n_giorni = 252        # Un anno di trading
+
+# Calcoliamo i rendimenti giornalieri del portafoglio totale
+returns = df_master['Equity_Totale'].diff().dropna()
+
+if not returns.empty:
+    mu = returns.mean()
+    sigma = returns.std()
+    ultimo_valore = df_master['Equity_Totale'].iloc[-1]
+
+    # Generazione simulazioni
+    simulazioni = np.zeros((n_giorni, n_simulazioni))
+    for i in range(n_simulazioni):
+        cambiamenti_casuali = np.random.normal(mu, sigma, n_giorni)
+        simulazioni[:, i] = ultimo_valore + np.cumsum(cambiamenti_casuali)
+
+    # Grafico con Plotly
+    fig_mc = go.Figure()
+    x_axis = np.arange(n_giorni)
+
+    # Disegnamo solo una parte delle linee per non appesantire il browser
+    for i in range(min(n_simulazioni, 100)):
+        fig_mc.add_trace(go.Scatter(x=x_axis, y=simulazioni[:, i], mode='lines', 
+                                    line=dict(width=0.5), opacity=0.1, showlegend=False))
+
+    # Aggiungiamo la media e i percentili (Rischio/Opportunità)
+    media_sim = np.mean(simulazioni, axis=1)
+    percentile_5 = np.percentile(simulazioni, 5, axis=1)
+    percentile_95 = np.percentile(simulazioni, 95, axis=1)
+
+    fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
+    fig_mc.add_trace(go.Scatter(x=x_axis, y=percentile_5, name='Scenario Pessimista (5%)', line=dict(color='red', dash='dash')))
+    fig_mc.add_trace(go.Scatter(x=x_axis, y=percentile_95, name='Scenario Ottimista (95%)', line=dict(color='green', dash='dash')))
+
+    fig_mc.update_layout(title="Possibili Evoluzioni del Capitale", template="plotly_white", xaxis_title="Giorni Futuri", yaxis_title="Equity ($)")
+    st.plotly_chart(fig_mc, use_container_width=True)
+    
+    # Recap statistico
+    st.info(f"Basato su {n_simulazioni} scenari: C'è il 95% di probabilità che tra un anno l'equity sia sopra ${percentile_5[-1]:,.0f}")
