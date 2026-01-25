@@ -1,12 +1,34 @@
 # Equity Portfolio Analysis
 
-Questa è una web app costruita con **Streamlit** per l'analisi di portafogli azionari. 
+# 📈 Titan Portfolio Professional
 
-1. Sincronizzazione Dati Real-TimeWeb Scraping Margini IBKR: Il software si collega automaticamente ai server di Interactive Brokers per recuperare i margini iniziali overnight aggiornati per i futures.Caching Intelligente: Utilizza il caching di Streamlit per ottimizzare le prestazioni e non sovraccaricare le richieste di rete.
-2. 2. Gestione e Parsing DatiMulti-file Upload: Supporta il caricamento simultaneo di più file .txt generati da Titan.Parsing Automatico: Estrae date, profitti/perdite (PnL) e posizioni (Long/Short) direttamente dal formato grezzo dei file.Allineamento Temporale: Sincronizza automaticamente strategie con date di inizio diverse in un unico database master.
-3. Analisi di Portafoglio (Aggregata)Equity Line Complessiva: Genera un grafico interattivo della performance combinata di tutte le strategie selezionate.Analisi del Drawdown: Calcola e visualizza graficamente l'andamento del drawdown monetario nel tempo.Capitale Prudenziale: Calcola il capitale suggerito per operare in sicurezza, basandosi sulla formula: $Capitale = Margine Max + (Max Drawdown \times 1.5)$.
-4. Risk Management AvanzatoMonitoraggio Margini Live: Calcola l'occupazione di margine reale giornaliera in base alle posizioni aperte (Long/Short) e ai dati IBKR.Matrice di Correlazione: Genera una heatmap ad alta risoluzione per identificare quanto le strategie siano correlate tra loro, fondamentale per la diversificazione.Esposizione Netta: Traccia l'esposizione specifica per ogni asset sottostante.
-5. Statistiche di Performance (KPI)Metriche Professionali: Calcola per ogni singola strategia e per l'intero portafoglio:Sharpe Ratio: Efficienza del rendimento rispetto al rischio.Profit Factor: Rapporto tra profitti e perdite lorde.MAR Ratio: Rapporto tra rendimento annuo e massimo drawdown.Win Rate %: Percentuale di trade chiusi in profitto.
-6. Analisi Temporale: Tabella di riepilogo annuale con calcolo del ROE% (Return on Equity) basato sul capitale prudenziale.
-7.Come usarloCarica i file: Trascina i file .txt delle tue strategie Titan nell'area di upload.Filtra: Usa la sidebar per selezionare il periodo temporale o escludere specifiche strategie.
+Analisi avanzata e gestione del rischio per portafogli di trading basati su strategie **Titan**. Questa web app permette di aggregare più flussi di dati, monitorare i margini in tempo reale e proiettare le performance future tramite simulazioni statistiche.
+
+🚀 **Prova l'app live qui:** https://equity-portfolio-paolosamarelli.streamlit.app/
+
+---
+
+## 🛠️ Funzionalità Principali
+
+### 1. 📊 Analisi di Portafoglio Aggregata
+* **Multi-Upload**: Caricamento simultaneo di file `.txt` esportati da Titan.
+* **Equity Line Master**: Visualizzazione della performance combinata di tutte le strategie selezionate.
+* **Drawdown Real-Time**: Monitoraggio costante del rischio monetario storico e attuale.
+
+### 2. 🛡️ Gestione del Rischio e Margini
+* **Live IBKR Margins**: Recupero automatico dei margini iniziali tramite web scraping dai server di Interactive Brokers.
+* **Margine Reale Giornaliero**: Calcolo dell'occupazione di capitale basato sulle posizioni (Long/Short) effettivamente aperte.
+* **Capitale Prudenziale**: Calcolo del capitale suggerito per operare in sicurezza basato sulla formula:  
+  `Capitale = Margine Max + (Max Drawdown * 1.5)`
+
+### 3. 🧬 Correlazione e Statistiche
+* **Heatmap di Correlazione**: Identificazione delle dipendenze tra le strategie per migliorare la diversificazione.
+* **KPI Professionali**: Sharpe Ratio, MAR Ratio, Profit Factor e Win Rate per ogni singola strategia.
+* **ROE Anno su Anno**: Calcolo del ritorno sul capitale basato sul capitale prudenziale.
+
+### 4. 🎲 Simulazione Monte Carlo
+* **Proiezione 252 giorni**: Generazione di migliaia di scenari futuri basati sulla volatilità e media storica dei rendimenti.
+* **Cono di Probabilità**: Visualizzazione dell'area di confidenza (95%) per stimare lo scenario peggiore e migliore a un anno.
+
+
 
