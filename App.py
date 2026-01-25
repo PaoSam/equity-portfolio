@@ -63,42 +63,17 @@ if uploaded_files:
             all_dates.extend(df['date'].tolist())
             strumenti_caricati.add(ticker)
 
-    # --- TABELLA MARGINI FILTRATA ---
-    st.write("### 📌 Margini IBKR Strumenti in Portafoglio")
-    margini_filtrati = []
-    for s in strumenti_caricati:
-        if s in live_margins:
-            margini_filtrati.append({"Strumento": s, "Margine Overnight ($)": live_margins[s]})
-    
-    if margini_filtrati:
-        st.table(pd.DataFrame(margini_filtrati).style.format({"Margine Overnight ($)": "{:,.2f}"}))
-    else:
-        st.warning("Nessun margine trovato per gli strumenti caricati.")
-
     if raw_data:
         selected_names = []
         ticker_map = {}
         
-        # --- SIDEBAR: FILTRI TEMPORALI SBLOCCATI ---
+        # --- SIDEBAR: TUTTI I CONTROLLI A SINISTRA ---
         st.sidebar.header("🗓️ Filtri Temporali")
-        
-        # Calcolo dinamico degli estremi basato sui file caricati
         abs_min_date = min(all_dates).date()
         abs_max_date = max(all_dates).date()
         
-        # Selezione data con range completo sbloccato
-        start_date = st.sidebar.date_input(
-            "Data Inizio", 
-            value=abs_min_date,
-            min_value=abs_min_date,
-            max_value=abs_max_date
-        )
-        end_date = st.sidebar.date_input(
-            "Data Fine", 
-            value=abs_max_date,
-            min_value=abs_min_date,
-            max_value=abs_max_date
-        )
+        start_date = st.sidebar.date_input("Data Inizio", value=abs_min_date, min_value=abs_min_date, max_value=abs_max_date)
+        end_date = st.sidebar.date_input("Data Fine", value=abs_max_date, min_value=abs_min_date, max_value=abs_max_date)
 
         st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
@@ -106,6 +81,19 @@ if uploaded_files:
             ticker_map[name] = name.split('_')[0].upper().strip()
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
+
+        # --- TABELLA MARGINI SOTTO LE STRATEGIE (SIDEBAR) ---
+        st.sidebar.write("---")
+        st.sidebar.subheader("📌 Margini IBKR Rilevati")
+        margini_filtrati = []
+        for s in strumenti_caricati:
+            if s in live_margins:
+                margini_filtrati.append({"Asset": s, "Margine ($)": live_margins[s]})
+        
+        if margini_filtrati:
+            st.sidebar.table(pd.DataFrame(margini_filtrati).set_index("Asset"))
+        else:
+            st.sidebar.warning("Nessun margine trovato.")
 
         if selected_names:
             # --- ELABORAZIONE DATI ---
@@ -135,12 +123,13 @@ if uploaded_files:
             df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
 
-            # --- SIDEBAR METRICHE ---
+            # --- METRICHE ECONOMICHE NELLA SIDEBAR ---
             max_m = df_master['Margine_Reale'].max()
             max_dd = abs(df_master['DD'].min())
             cap_prudenziale = max_m + (max_dd * 1.5)
 
             st.sidebar.write("---")
+            st.sidebar.header("💰 Capitale Necessario")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_prudenziale:,.0f}")
