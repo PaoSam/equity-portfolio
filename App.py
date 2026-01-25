@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, date
+from datetime import datetime
 import requests
 
 st.set_page_config(page_title="Professional Titan Analyzer", layout="wide")
@@ -26,7 +27,7 @@ def get_ibkr_margins(url):
         return margin_dict
     except: return {}
 
-st.markdown("# 📈 Analisi Reale Portafoglio Titan")
+st.markdown("# 📈 Analisi Avanzata Portafoglio Titan")
 
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
 with st.spinner('Sincronizzazione margini live...'):
@@ -67,11 +68,9 @@ if uploaded_files:
         selected_names = []
         ticker_map = {}
         
-        # --- SIDEBAR: TUTTI I CONTROLLI A SINISTRA ---
+        # --- SIDEBAR ---
         st.sidebar.header("🗓️ Filtri Temporali")
-        abs_min_date = min(all_dates).date()
-        abs_max_date = max(all_dates).date()
-        
+        abs_min_date, abs_max_date = min(all_dates).date(), max(all_dates).date()
         start_date = st.sidebar.date_input("Data Inizio", value=abs_min_date, min_value=abs_min_date, max_value=abs_max_date)
         end_date = st.sidebar.date_input("Data Fine", value=abs_max_date, min_value=abs_min_date, max_value=abs_max_date)
 
@@ -82,18 +81,11 @@ if uploaded_files:
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
-        # --- TABELLA MARGINI SOTTO LE STRATEGIE (SIDEBAR) ---
         st.sidebar.write("---")
-        st.sidebar.subheader("📌 Margini IBKR Rilevati")
-        margini_filtrati = []
-        for s in strumenti_caricati:
-            if s in live_margins:
-                margini_filtrati.append({"Asset": s, "Margine ($)": live_margins[s]})
-        
+        st.sidebar.subheader("📌 Margini IBKR")
+        margini_filtrati = [{"Asset": s, "Margine ($)": live_margins[s]} for s in strumenti_caricati if s in live_margins]
         if margini_filtrati:
             st.sidebar.table(pd.DataFrame(margini_filtrati).set_index("Asset"))
-        else:
-            st.sidebar.warning("Nessun margine trovato.")
 
         if selected_names:
             # --- ELABORAZIONE DATI ---
@@ -111,50 +103,63 @@ if uploaded_files:
                 for d in dates_set:
                     pos_val = df_master.loc[df_master['date'] == d, f'pos_{name}'].values[0]
                     if pos_val != 0:
-                        label = "L" if pos_val == 1 else "S"
-                        active_info[d].append(f"{name}({label})")
                         net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + pos_val
+                        active_info[d].append(f"{name}({'L' if pos_val==1 else 'S'})")
 
+            # Calcolo Margine Reale e Metriche
             m_giornaliero = [sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items()) for d in dates_set]
             df_master['Margine_Reale'] = m_giornaliero
-            df_master['Info_Attive'] = ["<br>".join(active_info[d]) if active_info[d] else "Flat" for d in dates_set]
-            
             pnl_cols = [f'pnl_{n}' for n in selected_names]
             df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
 
-            # --- METRICHE ECONOMICHE NELLA SIDEBAR ---
-            max_m = df_master['Margine_Reale'].max()
-            max_dd = abs(df_master['DD'].min())
+            # Sidebar Metriche
+            max_m, max_dd = df_master['Margine_Reale'].max(), abs(df_master['DD'].min())
             cap_prudenziale = max_m + (max_dd * 1.5)
-
             st.sidebar.write("---")
-            st.sidebar.header("💰 Capitale Necessario")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_prudenziale:,.0f}")
 
-            # --- GRAFICI ---
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, 
-                               row_heights=[0.5, 0.25, 0.25],
-                               subplot_titles=("Equity Line Portafoglio", "Equity dei Drawdown ($)", "Margine Netto Reale ($)"))
-            
+            # --- GRAFICI EQUITY E MARGINE ---
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25])
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], name='TOTALE', line=dict(color='black', width=3)), row=1, col=1)
             for name in selected_names:
                 fig.add_trace(go.Scatter(x=df_master['date'], y=df_master[f'eq_{name}'], name=name, line=dict(width=1), opacity=0.3), row=1, col=1)
-            
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['DD'], name='Drawdown', fill='tozeroy', line=dict(color='red')), row=2, col=1)
-            
-            fig.add_trace(go.Scatter(
-                x=df_master['date'], y=df_master['Margine_Reale'], name='Margine', fill='tozeroy', line=dict(color='orange'),
-                text=df_master['Info_Attive'],
-                hovertemplate="<b>Margine:</b> $%{y:,.0f}<br><b>Attive:</b><br>%{text}<extra></extra>"
-            ), row=3, col=1)
-            
-            fig.update_layout(height=1000, template="plotly_white", hovermode="x unified", showlegend=False)
+            fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Margine_Reale'], name='Margine', fill='tozeroy', line=dict(color='orange')), row=3, col=1)
+            fig.update_layout(height=1000, template="plotly_white", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # Performance
+            # --- 🚀 NUOVA SEZIONE: MATRICE DI CORRELAZIONE ---
+            st.write("---")
+            st.write("### 🧬 Matrice di Correlazione (Rendimenti Giornalieri)")
+            
+            # Calcoliamo la correlazione solo sui PnL delle strategie selezionate
+            corr_matrix = df_master[pnl_cols].corr()
+            
+            # Pulizia nomi colonne per il grafico
+            corr_matrix.columns = [c.replace('pnl_', '') for c in corr_matrix.columns]
+            corr_matrix.index = [c.replace('pnl_', '') for c in corr_matrix.index]
+
+            fig_corr = px.imshow(
+                corr_matrix, 
+                text_auto=".2f", 
+                color_continuous_scale='RdBu_r', 
+                zmin=-1, zmax=1,
+                labels=dict(color="Correlazione")
+            )
+            fig_corr.update_layout(height=500)
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+            st.info("""
+            **Come leggere la matrice:**
+            * **1.00 (Blu scuro):** Correlazione perfetta. Se una guadagna, l'altra guadagna uguale. (Male per la diversificazione)
+            * **0.00 (Bianco):** Strategie indipendenti. È lo scenario ideale.
+            * **Valori negativi (Rossi):** Una strategia tende a guadagnare quando l'altra perde. Ottimo per ridurre il drawdown!
+            """)
+
+            # Tabella Performance Finale
             st.write("### 📊 Risultati Annuali e ROE")
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
