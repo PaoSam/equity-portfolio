@@ -126,8 +126,8 @@ if uploaded_files:
                     sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)) if daily_returns.std() != 0 else 0
                     equity_curve = daily_returns.cumsum()
                     max_dd_strat = abs((equity_curve - equity_curve.cummax()).min())
-                    days = (end_date - start_date).days
-                    cagr = (daily_returns.sum() / days * 365) if days > 0 else 0
+                    days_diff = (end_date - start_date).days
+                    cagr = (daily_returns.sum() / days_diff * 365) if days_diff > 0 else 0
 
                     stats_list.append({
                         "Strategia": name,
@@ -185,17 +185,16 @@ if uploaded_files:
             with col2:
                 total_pnl = df_master[pnl_cols].sum().sum()
                 total_dd = abs(df_master['DD'].min())
-                days_diff = (end_date - start_date).days
-                ann_return = (total_pnl / days_diff * 365) if days_diff > 0 else 0
+                days_diff_total = (end_date - start_date).days
+                ann_return = (total_pnl / days_diff_total * 365) if days_diff_total > 0 else 0
                 st.write("### 🏆 Portfolio Efficiency")
                 st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
-            # --- 🎲 SEZIONE MONTE CARLO ---
+            # --- 🎲 SEZIONE MONTE CARLO MIGLIORATA ---
             st.write("---")
             st.write(f"### 🎲 Simulazione Monte Carlo ({n_sim} percorsi)")
             
-            # Calcolo rendimenti giornalieri (variazioni di PnL)
             returns = df_master['Equity_Totale'].diff().dropna()
             
             if not returns.empty:
@@ -203,35 +202,45 @@ if uploaded_files:
                 sigma = returns.std()
                 ultimo_valore = df_master['Equity_Totale'].iloc[-1]
 
-                # Generazione dati casuali
                 simulazioni = np.zeros((n_giorni, n_sim))
                 for i in range(n_sim):
-                    # Distribuzione normale basata su media e deviazione storica
                     cambiamenti = np.random.normal(mu, sigma, n_giorni)
                     simulazioni[:, i] = ultimo_valore + np.cumsum(cambiamenti)
 
-                # Grafico Monte Carlo
-                fig_mc = go.Figure()
-                x_axis = np.arange(n_giorni)
-
-                # Mostriamo solo 100 linee casuali per performance
-                for i in range(min(n_sim, 100)):
-                    fig_mc.add_trace(go.Scatter(x=x_axis, y=simulazioni[:, i], mode='lines', 
-                                                line=dict(width=0.5), opacity=0.1, showlegend=False))
-
-                # Medie e Percentili
                 media_sim = np.mean(simulazioni, axis=1)
                 p5 = np.percentile(simulazioni, 5, axis=1)
                 p95 = np.percentile(simulazioni, 95, axis=1)
+                x_axis = np.arange(n_giorni)
 
+                fig_mc = go.Figure()
+
+                # 1. Area di Confidenza (Ombreggiatura)
+                fig_mc.add_trace(go.Scatter(
+                    x=np.concatenate([x_axis, x_axis[::-1]]),
+                    y=np.concatenate([p95, p5[::-1]]),
+                    fill='toself',
+                    fillcolor='rgba(0, 100, 255, 0.1)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    hoverinfo="skip",
+                    name='Confidenza 90%'
+                ))
+
+                # 2. Linee individuali (visibilità aumentata)
+                for i in range(min(n_sim, 50)):
+                    fig_mc.add_trace(go.Scatter(
+                        x=x_axis, y=simulazioni[:, i], mode='lines', 
+                        line=dict(color='rgba(100, 100, 100, 0.3)', width=1), 
+                        showlegend=False
+                    ))
+
+                # 3. Linee Statistiche
                 fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
-                fig_mc.add_trace(go.Scatter(x=x_axis, y=p5, name='Pessimista (5%)', line=dict(color='red', dash='dash')))
-                fig_mc.add_trace(go.Scatter(x=x_axis, y=p95, name='Ottimista (95%)', line=dict(color='green', dash='dash')))
+                fig_mc.add_trace(go.Scatter(x=x_axis, y=p5, name='Pessimista (5%)', line=dict(color='red', width=2, dash='dash')))
+                fig_mc.add_trace(go.Scatter(x=x_axis, y=p95, name='Ottimista (95%)', line=dict(color='green', width=2, dash='dash')))
 
                 fig_mc.update_layout(height=600, template="plotly_white", xaxis_title="Giorni Futuri", yaxis_title="Proiezione Equity ($)")
                 st.plotly_chart(fig_mc, use_container_width=True)
                 
-                # Messaggio riassuntivo
                 st.success(f"Basato sui rendimenti storici: c'è il 95% di probabilità che l'equity sia superiore a **${p5[-1]:,.0f}** tra {n_giorni} giorni.")
 
             # --- PERFORMANCE ANNUALE ---
