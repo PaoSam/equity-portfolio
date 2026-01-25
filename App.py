@@ -76,6 +76,11 @@ if uploaded_files:
         end_date = st.sidebar.date_input("Data Fine", value=abs_max_date, min_value=abs_min_date, max_value=abs_max_date)
 
         st.sidebar.write("---")
+        st.sidebar.header("🎲 Parametri Monte Carlo")
+        n_sim = st.sidebar.slider("Numero Simulazioni", 100, 5000, 1000)
+        n_giorni = st.sidebar.number_input("Giorni Proiezione", value=252)
+
+        st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
         for name in sorted(raw_data.keys()):
             ticker_map[name] = name.split('_')[0].upper().strip()
@@ -140,7 +145,7 @@ if uploaded_files:
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
             
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25],
-                               subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
+                                subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
             
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], name='PORTAFOGLIO', line=dict(color='black', width=3.5)), row=1, col=1)
             for name in selected_names:
@@ -161,29 +166,17 @@ if uploaded_files:
             fig.update_layout(height=900, template="plotly_white", hovermode="x unified", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- MATRICE DI CORRELAZIONE INGRANDITA ---
+            # --- MATRICE DI CORRELAZIONE ---
             st.write("---")
-            st.write("### 🧬 Matrice di Correlazione (Dettaglio Avanzato)")
+            st.write("### 🧬 Matrice di Correlazione")
             corr = df_master[pnl_cols].corr()
             corr.columns = [c.replace('pnl_', '') for c in corr.columns]
             corr.index = [c.replace('pnl_', '') for c in corr.index]
-            
-            fig_corr = px.imshow(
-                corr, 
-                text_auto=".2f", 
-                color_continuous_scale='RdBu_r', 
-                zmin=-1, zmax=1,
-                aspect="auto"
-            )
-            fig_corr.update_layout(
-                height=800, # Ingrandito sensibilmente
-                margin=dict(l=50, r=50, t=50, b=50),
-                xaxis_title="Strategia",
-                yaxis_title="Strategia"
-            )
+            fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
+            fig_corr.update_layout(height=700)
             st.plotly_chart(fig_corr, use_container_width=True)
 
-            # --- STATISTICHE E PERFORMANCE ---
+            # --- STATISTICHE ---
             st.write("---")
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -192,12 +185,57 @@ if uploaded_files:
             with col2:
                 total_pnl = df_master[pnl_cols].sum().sum()
                 total_dd = abs(df_master['DD'].min())
-                days = (end_date - start_date).days
-                ann_return = (total_pnl / days * 365) if days > 0 else 0
+                days_diff = (end_date - start_date).days
+                ann_return = (total_pnl / days_diff * 365) if days_diff > 0 else 0
                 st.write("### 🏆 Portfolio Efficiency")
                 st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
+            # --- 🎲 SEZIONE MONTE CARLO ---
+            st.write("---")
+            st.write(f"### 🎲 Simulazione Monte Carlo ({n_sim} percorsi)")
+            
+            # Calcolo rendimenti giornalieri (variazioni di PnL)
+            returns = df_master['Equity_Totale'].diff().dropna()
+            
+            if not returns.empty:
+                mu = returns.mean()
+                sigma = returns.std()
+                ultimo_valore = df_master['Equity_Totale'].iloc[-1]
+
+                # Generazione dati casuali
+                simulazioni = np.zeros((n_giorni, n_sim))
+                for i in range(n_sim):
+                    # Distribuzione normale basata su media e deviazione storica
+                    cambiamenti = np.random.normal(mu, sigma, n_giorni)
+                    simulazioni[:, i] = ultimo_valore + np.cumsum(cambiamenti)
+
+                # Grafico Monte Carlo
+                fig_mc = go.Figure()
+                x_axis = np.arange(n_giorni)
+
+                # Mostriamo solo 100 linee casuali per performance
+                for i in range(min(n_sim, 100)):
+                    fig_mc.add_trace(go.Scatter(x=x_axis, y=simulazioni[:, i], mode='lines', 
+                                                line=dict(width=0.5), opacity=0.1, showlegend=False))
+
+                # Medie e Percentili
+                media_sim = np.mean(simulazioni, axis=1)
+                p5 = np.percentile(simulazioni, 5, axis=1)
+                p95 = np.percentile(simulazioni, 95, axis=1)
+
+                fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
+                fig_mc.add_trace(go.Scatter(x=x_axis, y=p5, name='Pessimista (5%)', line=dict(color='red', dash='dash')))
+                fig_mc.add_trace(go.Scatter(x=x_axis, y=p95, name='Ottimista (95%)', line=dict(color='green', dash='dash')))
+
+                fig_mc.update_layout(height=600, template="plotly_white", xaxis_title="Giorni Futuri", yaxis_title="Proiezione Equity ($)")
+                st.plotly_chart(fig_mc, use_container_width=True)
+                
+                # Messaggio riassuntivo
+                st.success(f"Basato sui rendimenti storici: c'è il 95% di probabilità che l'equity sia superiore a **${p5[-1]:,.0f}** tra {n_giorni} giorni.")
+
+            # --- PERFORMANCE ANNUALE ---
+            st.write("---")
             st.write("### 📅 Performance Annuale e ROE")
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
@@ -212,49 +250,3 @@ if uploaded_files:
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_pru:,.0f}")
-            import numpy as np
-
-st.write("---")
-st.write("### 🎲 Simulazione Monte Carlo (Proiezione 252 giorni)")
-
-# Parametri della simulazione
-n_simulazioni = 1000  # Quanti scenari generare
-n_giorni = 252        # Un anno di trading
-
-# Calcoliamo i rendimenti giornalieri del portafoglio totale
-returns = df_master['Equity_Totale'].diff().dropna()
-
-if not returns.empty:
-    mu = returns.mean()
-    sigma = returns.std()
-    ultimo_valore = df_master['Equity_Totale'].iloc[-1]
-
-    # Generazione simulazioni
-    simulazioni = np.zeros((n_giorni, n_simulazioni))
-    for i in range(n_simulazioni):
-        cambiamenti_casuali = np.random.normal(mu, sigma, n_giorni)
-        simulazioni[:, i] = ultimo_valore + np.cumsum(cambiamenti_casuali)
-
-    # Grafico con Plotly
-    fig_mc = go.Figure()
-    x_axis = np.arange(n_giorni)
-
-    # Disegnamo solo una parte delle linee per non appesantire il browser
-    for i in range(min(n_simulazioni, 100)):
-        fig_mc.add_trace(go.Scatter(x=x_axis, y=simulazioni[:, i], mode='lines', 
-                                    line=dict(width=0.5), opacity=0.1, showlegend=False))
-
-    # Aggiungiamo la media e i percentili (Rischio/Opportunità)
-    media_sim = np.mean(simulazioni, axis=1)
-    percentile_5 = np.percentile(simulazioni, 5, axis=1)
-    percentile_95 = np.percentile(simulazioni, 95, axis=1)
-
-    fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
-    fig_mc.add_trace(go.Scatter(x=x_axis, y=percentile_5, name='Scenario Pessimista (5%)', line=dict(color='red', dash='dash')))
-    fig_mc.add_trace(go.Scatter(x=x_axis, y=percentile_95, name='Scenario Ottimista (95%)', line=dict(color='green', dash='dash')))
-
-    fig_mc.update_layout(title="Possibili Evoluzioni del Capitale", template="plotly_white", xaxis_title="Giorni Futuri", yaxis_title="Equity ($)")
-    st.plotly_chart(fig_mc, use_container_width=True)
-    
-    # Recap statistico
-    st.info(f"Basato su {n_simulazioni} scenari: C'è il 95% di probabilità che tra un anno l'equity sia sopra ${percentile_5[-1]:,.0f}")
