@@ -26,25 +26,18 @@ def get_ibkr_margins(url):
         return margin_dict
     except: return {}
 
-st.markdown("# 📈 Analisi Avanzata Portafoglio Titan")
+st.markdown("# 📈 Analisi Reale Portafoglio Titan")
 
 url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
-with st.spinner('Sincronizzazione margini live con IBKR...'):
+with st.spinner('Sincronizzazione margini live...'):
     live_margins = get_ibkr_margins(url_ibkr)
-
-# --- TABELLA MARGINI RILEVATI (NUOVA SEZIONE) ---
-with st.expander("🔍 Visualizza Tabella Margini Rilevati da Interactive Brokers"):
-    if live_margins:
-        df_margins_display = pd.DataFrame([{"Strumento": k, "Margine Overnight Initial ($)": v} for k, v in live_margins.items()])
-        st.dataframe(df_margins_display.sort_values("Strumento"), use_container_width=True, hide_index=True)
-    else:
-        st.error("Impossibile recuperare i margini dal sito IBKR. Controlla la connessione.")
 
 uploaded_files = st.file_uploader("Carica file Titan (.txt)", type="txt", accept_multiple_files=True)
 
 if uploaded_files:
     raw_data = {}
     all_dates = []
+    strumenti_caricati = set() # Per filtrare la tabella margini
     
     def load_equity(uploaded_file):
         try:
@@ -63,35 +56,46 @@ if uploaded_files:
 
     for f in uploaded_files:
         name = f.name.replace('.txt', '').replace('#', '').strip()
+        ticker = name.split('_')[0].upper().strip()
         df = load_equity(f)
         if df is not None:
             raw_data[name] = df
             all_dates.extend(df['date'].tolist())
+            strumenti_caricati.add(ticker)
+
+    # --- TABELLA MARGINI FILTRATA ---
+    st.write("### 📌 Margini IBKR Strumenti in Portafoglio")
+    margini_filtrati = []
+    for s in strumenti_caricati:
+        if s in live_margins:
+            margini_filtrati.append({"Strumento": s, "Margine Overnight ($)": live_margins[s]})
+    
+    if margini_filtrati:
+        st.table(pd.DataFrame(margini_filtrati).style.format({"Margine Overnight ($)": "{:,.2f}"}))
+    else:
+        st.warning("Nessun margine trovato per gli strumenti caricati.")
 
     if raw_data:
         selected_names = []
         ticker_map = {}
         
-        # --- SIDEBAR: FILTRI E SELEZIONI ---
+        # --- SIDEBAR: FILTRI ---
         st.sidebar.header("🗓️ Filtri Temporali")
-        min_date = min(all_dates).date()
-        max_date = max(all_dates).date()
+        min_date, max_date = min(all_dates).date(), max(all_dates).date()
         start_date = st.sidebar.date_input("Data Inizio", min_date)
         end_date = st.sidebar.date_input("Data Fine", max_date)
 
         st.sidebar.write("---")
-        st.sidebar.header("🛠️ Selezione Strategie")
+        st.sidebar.header("🛠️ Strategie")
         for name in sorted(raw_data.keys()):
-            ticker = name.split('_')[0].upper().strip()
-            ticker_map[name] = ticker
+            ticker_map[name] = name.split('_')[0].upper().strip()
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
         if selected_names:
-            # --- ELABORAZIONE DATI ---
+            # --- ELABORAZIONE ---
             dates_set = sorted([d for d in list(set(all_dates)) if start_date <= d.date() <= end_date])
             df_master = pd.DataFrame({'date': dates_set})
-            
             net_exposure = {d: {} for d in dates_set}
             active_info = {d: [] for d in dates_set}
 
@@ -104,31 +108,24 @@ if uploaded_files:
                 for d in dates_set:
                     pos_val = df_master.loc[df_master['date'] == d, f'pos_{name}'].values[0]
                     if pos_val != 0:
-                        label = "Long" if pos_val == 1 else "Short"
-                        active_info[d].append(f"{name} ({label})")
+                        label = "L" if pos_val == 1 else "S"
+                        active_info[d].append(f"{name}({label})")
                         net_exposure[d][ticker] = net_exposure[d].get(ticker, 0) + pos_val
 
-            # Calcolo margini e stringhe per grafico
-            m_giornaliero = []
-            testo_margine = []
-            for d in dates_set:
-                day_m = sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items())
-                m_giornaliero.append(day_m)
-                testo_margine.append("<br>".join(active_info[d]) if active_info[d] else "Flat")
-
+            m_giornaliero = [sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items()) for d in dates_set]
             df_master['Margine_Reale'] = m_giornaliero
-            df_master['Info_Attive'] = testo_margine
+            df_master['Info_Attive'] = ["<br>".join(active_info[d]) if active_info[d] else "Flat" for d in dates_set]
+            
             pnl_cols = [f'pnl_{n}' for n in selected_names]
             df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
 
-            # --- METRICHE SIDEBAR ---
+            # --- SIDEBAR METRICHE ---
             max_m = df_master['Margine_Reale'].max()
             max_dd = abs(df_master['DD'].min())
             cap_prudenziale = max_m + (max_dd * 1.5)
 
             st.sidebar.write("---")
-            st.sidebar.header("💰 Capitale Necessario")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
             st.sidebar.info(f"**Capitale Prudenziale:**\n${cap_prudenziale:,.0f}")
@@ -136,7 +133,7 @@ if uploaded_files:
             # --- GRAFICI ---
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, 
                                row_heights=[0.5, 0.25, 0.25],
-                               subplot_titles=("Equity (Totale e Singole)", "Drawdown Portafoglio ($)", "Margine Reale ($) - Dettaglio Strategie Attive"))
+                               subplot_titles=("Equity Line Portafoglio", "Equity dei Drawdown ($)", "Margine Netto Reale ($)"))
             
             fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], name='TOTALE', line=dict(color='black', width=3)), row=1, col=1)
             for name in selected_names:
@@ -150,11 +147,11 @@ if uploaded_files:
                 hovertemplate="<b>Margine:</b> $%{y:,.0f}<br><b>Attive:</b><br>%{text}<extra></extra>"
             ), row=3, col=1)
             
-            fig.update_layout(height=1000, template="plotly_white", hovermode="x unified")
+            fig.update_layout(height=1000, template="plotly_white", hovermode="x unified", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # Performance Annuale
-            st.write("### 📊 Tabella Performance e ROE")
+            # Performance
+            st.write("### 📊 Risultati Annuali e ROE")
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
             res['PnL Totale'] = res.sum(axis=1)
