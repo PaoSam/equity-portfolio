@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, date
 import requests
 
 st.set_page_config(page_title="Professional Titan Analyzer", layout="wide")
@@ -37,7 +37,7 @@ uploaded_files = st.file_uploader("Carica file Titan (.txt)", type="txt", accept
 if uploaded_files:
     raw_data = {}
     all_dates = []
-    strumenti_caricati = set() # Per filtrare la tabella margini
+    strumenti_caricati = set()
     
     def load_equity(uploaded_file):
         try:
@@ -79,11 +79,26 @@ if uploaded_files:
         selected_names = []
         ticker_map = {}
         
-        # --- SIDEBAR: FILTRI ---
+        # --- SIDEBAR: FILTRI TEMPORALI SBLOCCATI ---
         st.sidebar.header("🗓️ Filtri Temporali")
-        min_date, max_date = min(all_dates).date(), max(all_dates).date()
-        start_date = st.sidebar.date_input("Data Inizio", min_date)
-        end_date = st.sidebar.date_input("Data Fine", max_date)
+        
+        # Calcolo dinamico degli estremi basato sui file caricati
+        abs_min_date = min(all_dates).date()
+        abs_max_date = max(all_dates).date()
+        
+        # Selezione data con range completo sbloccato
+        start_date = st.sidebar.date_input(
+            "Data Inizio", 
+            value=abs_min_date,
+            min_value=abs_min_date,
+            max_value=abs_max_date
+        )
+        end_date = st.sidebar.date_input(
+            "Data Fine", 
+            value=abs_max_date,
+            min_value=abs_min_date,
+            max_value=abs_max_date
+        )
 
         st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
@@ -93,7 +108,7 @@ if uploaded_files:
                 selected_names.append(name)
 
         if selected_names:
-            # --- ELABORAZIONE ---
+            # --- ELABORAZIONE DATI ---
             dates_set = sorted([d for d in list(set(all_dates)) if start_date <= d.date() <= end_date])
             df_master = pd.DataFrame({'date': dates_set})
             net_exposure = {d: {} for d in dates_set}
