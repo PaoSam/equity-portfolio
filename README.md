@@ -30,5 +30,7 @@ Analisi avanzata e gestione del rischio per portafogli di trading basati su stra
 * **Proiezione 252 giorni**: Generazione di migliaia di scenari futuri basati sulla volatilità e media storica dei rendimenti.
 * **Cono di Probabilità**: Visualizzazione dell'area di confidenza (95%) per stimare lo scenario peggiore e migliore a un anno.
 
+Da aggiungere proposta di Simone
+consentire di introdurre il calcolo di slippage/commissioniconsentire di configurare il numero di contratti per una strategiaconsentire di usare un moltiplicatore per una strategia, ad esempio se la strategia gira su GC ma la si trada con MGC (il moltiplicatore in questo caso sarebbe 0.1)
 
 
