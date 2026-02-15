@@ -30,7 +30,7 @@ def get_ibkr_margins(url):
 
 st.markdown("# 📈 Analisi Avanzata Portafoglio Titan")
 
-url_ibkr = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
+url_ibkr = "https://www.interactivebrokers.co.uk/en/trading/margin-futures-fops.php?hm=eu&ex=us&rgt=0&rsk=1&pm=1&rst=101006010801080808"
 with st.spinner('Sincronizzazione margini live...'):
     live_margins = get_ibkr_margins(url_ibkr)
 
