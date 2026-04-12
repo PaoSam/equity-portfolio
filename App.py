@@ -74,7 +74,7 @@ if uploaded_files:
         selected_names = []
         ticker_map = {}
        
-        # --- SIDEBAR ---
+        # ====================== SIDEBAR ======================
         st.sidebar.header("🗓️ Filtri Temporali")
         abs_min_date, abs_max_date = min(all_dates).date(), max(all_dates).date()
         start_date = st.sidebar.date_input("Data Inizio", value=abs_min_date, min_value=abs_min_date, max_value=abs_max_date)
@@ -92,15 +92,45 @@ if uploaded_files:
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
-        # --- NUOVO CHECKBOX per Equity Totale ---
         st.sidebar.write("---")
         show_total_equity = st.sidebar.checkbox("Mostra Equity Totale (Portafoglio)", value=True, key="show_total")
 
+        # ====================== NUOVA SEZIONE: MARGINI MANUALI ======================
         st.sidebar.write("---")
-        st.sidebar.subheader("📌 Margini IBKR")
-        margini_filtrati = [{"Asset": s, "Margine ($)": live_margins[s]} for s in strumenti_caricati if s in live_margins]
-        if margini_filtrati:
-            st.sidebar.table(pd.DataFrame(margini_filtrati).set_index("Asset"))
+        st.sidebar.subheader("📌 Margini Manuali (Personalizzati)")
+
+        # Creiamo una tabella editabile con i ticker presenti
+        manual_margin_data = []
+        for ticker in sorted(strumenti_caricati):
+            live_val = live_margins.get(ticker, 0)
+            manual_margin_data.append({"Ticker": ticker, "Margine Manuale ($)": live_val})
+
+        manual_df = pd.DataFrame(manual_margin_data)
+        
+        # Tabella editabile
+        edited_df = st.sidebar.data_editor(
+            manual_df,
+            column_config={
+                "Ticker": st.column_config.TextColumn(disabled=True),
+                "Margine Manuale ($)": st.column_config.NumberColumn(
+                    min_value=0,
+                    format="$%d",
+                    step=50
+                )
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="manual_margins_editor"
+        )
+
+        # Creiamo dizionario dei margini finali (manuale > live)
+        final_margins = {}
+        for _, row in edited_df.iterrows():
+            final_margins[row["Ticker"]] = row["Margine Manuale ($)"]
+
+        st.sidebar.caption("Modifica i valori per sovrascrivere i margini IBKR")
+
+        # ====================== FINE SIDEBAR ======================
 
         if selected_names:
             dates_set = sorted([d for d in list(set(all_dates)) if start_date <= d.date() <= end_date])
@@ -153,13 +183,11 @@ if uploaded_files:
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25],
                                 subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
            
-            # Equity Totale (con checkbox)
             if show_total_equity:
                 fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], 
                                        name='PORTAFOGLIO', line=dict(color='black', width=4.5)), 
                              row=1, col=1)
 
-            # Singole strategie - COLORI PIÙ VIVACI E MARCATI
             colors = px.colors.qualitative.Plotly + px.colors.qualitative.Bold + px.colors.qualitative.Vivid
             for i, name in enumerate(selected_names):
                 color = colors[i % len(colors)]
@@ -175,9 +203,9 @@ if uploaded_files:
                                    name='Drawdown', fill='tozeroy', line=dict(color='red')), 
                          row=2, col=1)
 
-            # --- CALCOLO MARGINE + INFO STRATEGIE ATTIVE ---
+            # ====================== CALCOLO MARGINE REALE (con margini manuali) ======================
             net_exposure = {d: {t: 0 for t in strumenti_caricati} for d in dates_set}
-            active_count_per_day = {d: 0 for d in dates_set}   # nuovo: conteggio totale strategie attive
+            active_count_per_day = {d: 0 for d in dates_set}
 
             for name in selected_names:
                 for d in dates_set:
@@ -187,10 +215,16 @@ if uploaded_files:
                     if pos_val != 0:
                         active_count_per_day[d] += 1
 
-            m_giornaliero = [sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items()) 
-                           for d in dates_set]
+            # USO DEI MARGINI MANUALI (o live se non modificati)
+            m_giornaliero = []
+            for d in dates_set:
+                daily_margin = 0
+                for t, pos in net_exposure[d].items():
+                    margin_per_contract = final_margins.get(t, live_margins.get(t, 0))
+                    daily_margin += abs(pos) * margin_per_contract
+                m_giornaliero.append(daily_margin)
 
-            # Hover migliorato con numero di strategie attive contemporaneamente
+            # Hover migliorato
             hover_text = []
             for d in dates_set:
                 strat_list = active_info[d]
@@ -204,7 +238,7 @@ if uploaded_files:
             fig.add_trace(go.Scatter(
                 x=df_master['date'], 
                 y=m_giornaliero, 
-                name='Margine', 
+                name='Margine Reale', 
                 fill='tozeroy', 
                 line=dict(color='orange', width=3),
                 text=hover_text,
@@ -214,10 +248,9 @@ if uploaded_files:
             fig.update_layout(height=900, template="plotly_white", hovermode="x unified", showlegend=True)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- Il resto del codice rimane IDENTICO (correlazione, statistiche, Monte Carlo, ROE, ecc.) ---
-            # ... (tutto il codice da "st.write("---")" in poi fino alla fine rimane invariato)
+            # ====================== IL RESTO DEL CODICE RIMANE INVARIATO ======================
+            # (Matrice di correlazione, statistiche, Monte Carlo, Performance Annuale, ecc.)
 
-            # --- MATRICE DI CORRELAZIONE ---
             st.write("---")
             st.write("### 🧬 Matrice di Correlazione")
             corr = df_master[pnl_cols].corr()
@@ -227,7 +260,6 @@ if uploaded_files:
             fig_corr.update_layout(height=700)
             st.plotly_chart(fig_corr, use_container_width=True)
 
-            # --- STATISTICHE ---
             st.write("---")
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -242,7 +274,7 @@ if uploaded_files:
                 st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
-            # --- MONTE CARLO ---
+            # Monte Carlo (invariato)
             st.write("---")
             st.write(f"### 🎲 Simulazione Monte Carlo ({n_sim} percorsi)")
             returns = df_master['Equity_Totale'].diff().dropna()
@@ -259,21 +291,12 @@ if uploaded_files:
                 p95 = np.percentile(simulazioni, 95, axis=1)
                 x_axis = np.arange(n_giorni)
                 fig_mc = go.Figure()
-                fig_mc.add_trace(go.Scatter(
-                    x=np.concatenate([x_axis, x_axis[::-1]]),
-                    y=np.concatenate([p95, p5[::-1]]),
-                    fill='toself',
-                    fillcolor='rgba(0, 100, 255, 0.1)',
-                    line=dict(color='rgba(255,255,255,0)'),
-                    hoverinfo="skip",
-                    name='Confidenza 90%'
-                ))
+                fig_mc.add_trace(go.Scatter(x=np.concatenate([x_axis, x_axis[::-1]]), y=np.concatenate([p95, p5[::-1]]),
+                                           fill='toself', fillcolor='rgba(0, 100, 255, 0.1)', line=dict(color='rgba(255,255,255,0)'),
+                                           hoverinfo="skip", name='Confidenza 90%'))
                 for i in range(min(n_sim, 50)):
-                    fig_mc.add_trace(go.Scatter(
-                        x=x_axis, y=simulazioni[:, i], mode='lines',
-                        line=dict(color='rgba(100, 100, 100, 0.3)', width=1),
-                        showlegend=False
-                    ))
+                    fig_mc.add_trace(go.Scatter(x=x_axis, y=simulazioni[:, i], mode='lines',
+                                              line=dict(color='rgba(100, 100, 100, 0.3)', width=1), showlegend=False))
                 fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
                 fig_mc.add_trace(go.Scatter(x=x_axis, y=p5, name='Pessimista (5%)', line=dict(color='red', width=2, dash='dash')))
                 fig_mc.add_trace(go.Scatter(x=x_axis, y=p95, name='Ottimista (95%)', line=dict(color='green', width=2, dash='dash')))
@@ -281,18 +304,19 @@ if uploaded_files:
                 st.plotly_chart(fig_mc, use_container_width=True)
                 st.success(f"Basato sui rendimenti storici: c'è il 95% di probabilità che l'equity sia superiore a **${p5[-1]:,.0f}** tra {n_giorni} giorni.")
 
-            # --- PERFORMANCE ANNUALE ---
+            # Performance Annuale + ROE
             st.write("---")
             st.write("### 📅 Performance Annuale e ROE")
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
             res['PnL Totale'] = res.sum(axis=1)
-            max_m, max_dd = max(m_giornaliero), abs(df_master['DD'].min())
+            max_m = max(m_giornaliero) if m_giornaliero else 0
+            max_dd = abs(df_master['DD'].min())
             cap_pru = max_m + (max_dd * 1.5)
             res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2)
             st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
 
-            # SIDEBAR RECAP
+            # Sidebar Recap
             st.sidebar.write("---")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
