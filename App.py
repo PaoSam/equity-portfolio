@@ -5,10 +5,38 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime
+import requests
 
 st.set_page_config(page_title="Titan Portfolio Professional", layout="wide")
 
+# --- 1. RECUPERO MARGINI LIVE ---
+@st.cache_data(ttl=3600)
+def get_ibkr_margins(url):
+    try:
+        header = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=header, timeout=15)
+        tables = pd.read_html(response.text, flavor='lxml')
+        margin_dict = {}
+        for df in tables:
+            df.columns = [str(c).strip() for c in df.columns]
+            if 'Underlying' in df.columns and 'Overnight Initial' in df.columns:
+                for _, row in df.iterrows():
+                    ticker = str(row['Underlying']).strip().upper()
+                    val_raw = str(row['Overnight Initial']).replace('$', '').replace(',', '').strip()
+                    try: 
+                        margin_dict[ticker] = float(val_raw)
+                    except: 
+                        continue
+        return margin_dict
+    except: 
+        return {}
+
 st.markdown("# 📈 Analisi Avanzata Portafoglio Titan")
+
+url_ibkr = "https://www.interactivebrokers.co.uk/en/trading/margin-futures-fops.php?hm=eu&ex=us&rgt=0&rsk=1&pm=1&rst=101006010801080808"
+
+with st.spinner('Sincronizzazione margini live...'):
+    live_margins = get_ibkr_margins(url_ibkr)
 
 uploaded_files = st.file_uploader("Carica file Titan (.txt)", type="txt", accept_multiple_files=True)
 
@@ -64,39 +92,15 @@ if uploaded_files:
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
+        # --- NUOVO CHECKBOX per Equity Totale ---
         st.sidebar.write("---")
         show_total_equity = st.sidebar.checkbox("Mostra Equity Totale (Portafoglio)", value=True, key="show_total")
 
-        # ====================== NUOVA TABELLA MARGINI MANUALI ======================
         st.sidebar.write("---")
-        st.sidebar.subheader("📌 Margini Manuali (editabili)")
-
-        # Inizializza / aggiorna session_state se ci sono nuovi ticker
-        if 'manual_margins' not in st.session_state or \
-           st.session_state.get('last_tickers') != sorted(strumenti_caricati):
-            df_init = pd.DataFrame({
-                'Asset': list(strumenti_caricati),
-                'Margine ($)': [0.0] * len(strumenti_caricati)
-            }).set_index('Asset')
-            st.session_state.manual_margins = df_init
-            st.session_state.last_tickers = sorted(strumenti_caricati)
-
-        # Tabella editabile
-        edited_df = st.sidebar.data_editor(
-            st.session_state.manual_margins,
-            num_rows="fixed",
-            use_container_width=True,
-            column_config={
-                "Margine ($)": st.column_config.NumberColumn(
-                    format="$%d",
-                    min_value=0,
-                    step=100
-                )
-            }
-        )
-        st.session_state.manual_margins = edited_df
-        manual_margins_dict = edited_df['Margine ($)'].to_dict()
-        # ===========================================================================
+        st.sidebar.subheader("📌 Margini IBKR")
+        margini_filtrati = [{"Asset": s, "Margine ($)": live_margins[s]} for s in strumenti_caricati if s in live_margins]
+        if margini_filtrati:
+            st.sidebar.table(pd.DataFrame(margini_filtrati).set_index("Asset"))
 
         if selected_names:
             dates_set = sorted([d for d in list(set(all_dates)) if start_date <= d.date() <= end_date])
@@ -149,11 +153,13 @@ if uploaded_files:
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25],
                                 subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
            
+            # Equity Totale (con checkbox)
             if show_total_equity:
                 fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'], 
                                        name='PORTAFOGLIO', line=dict(color='black', width=4.5)), 
                              row=1, col=1)
 
+            # Singole strategie - COLORI PIÙ VIVACI E MARCATI
             colors = px.colors.qualitative.Plotly + px.colors.qualitative.Bold + px.colors.qualitative.Vivid
             for i, name in enumerate(selected_names):
                 color = colors[i % len(colors)]
@@ -169,9 +175,9 @@ if uploaded_files:
                                    name='Drawdown', fill='tozeroy', line=dict(color='red')), 
                          row=2, col=1)
 
-            # --- CALCOLO MARGINE MANUALE + CONTEGGIO STRATEGIE ATTIVE ---
+            # --- CALCOLO MARGINE + INFO STRATEGIE ATTIVE ---
             net_exposure = {d: {t: 0 for t in strumenti_caricati} for d in dates_set}
-            active_count_per_day = {d: 0 for d in dates_set}
+            active_count_per_day = {d: 0 for d in dates_set}   # nuovo: conteggio totale strategie attive
 
             for name in selected_names:
                 for d in dates_set:
@@ -181,11 +187,10 @@ if uploaded_files:
                     if pos_val != 0:
                         active_count_per_day[d] += 1
 
-            # Margine calcolato SOLO con i valori manuali
-            m_giornaliero = [sum(abs(pos) * manual_margins_dict.get(t, 0) for t, pos in net_exposure[d].items()) 
+            m_giornaliero = [sum(abs(pos) * live_margins.get(t, 0) for t, pos in net_exposure[d].items()) 
                            for d in dates_set]
 
-            # Hover migliorato
+            # Hover migliorato con numero di strategie attive contemporaneamente
             hover_text = []
             for d in dates_set:
                 strat_list = active_info[d]
@@ -209,7 +214,10 @@ if uploaded_files:
             fig.update_layout(height=900, template="plotly_white", hovermode="x unified", showlegend=True)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- Il resto del codice (correlazione, statistiche, Monte Carlo, ROE, ecc.) rimane IDENTICO ---
+            # --- Il resto del codice rimane IDENTICO (correlazione, statistiche, Monte Carlo, ROE, ecc.) ---
+            # ... (tutto il codice da "st.write("---")" in poi fino alla fine rimane invariato)
+
+            # --- MATRICE DI CORRELAZIONE ---
             st.write("---")
             st.write("### 🧬 Matrice di Correlazione")
             corr = df_master[pnl_cols].corr()
@@ -219,6 +227,7 @@ if uploaded_files:
             fig_corr.update_layout(height=700)
             st.plotly_chart(fig_corr, use_container_width=True)
 
+            # --- STATISTICHE ---
             st.write("---")
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -233,6 +242,7 @@ if uploaded_files:
                 st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
+            # --- MONTE CARLO ---
             st.write("---")
             st.write(f"### 🎲 Simulazione Monte Carlo ({n_sim} percorsi)")
             returns = df_master['Equity_Totale'].diff().dropna()
@@ -271,6 +281,7 @@ if uploaded_files:
                 st.plotly_chart(fig_mc, use_container_width=True)
                 st.success(f"Basato sui rendimenti storici: c'è il 95% di probabilità che l'equity sia superiore a **${p5[-1]:,.0f}** tra {n_giorni} giorni.")
 
+            # --- PERFORMANCE ANNUALE ---
             st.write("---")
             st.write("### 📅 Performance Annuale e ROE")
             df_master['Year'] = df_master['date'].dt.year
@@ -281,6 +292,7 @@ if uploaded_files:
             res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2)
             st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
 
+            # SIDEBAR RECAP
             st.sidebar.write("---")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
