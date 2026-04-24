@@ -65,9 +65,9 @@ if uploaded_files:
         except:
             return None
 
-    for f in uploaded_files:
-        name = f.name.replace('.txt', '').replace('#', '').strip()
-        ticker = name.split('*')[0].upper().strip()
+for f in uploaded_files:
+    name = f.name.replace('.txt', '').replace('#', '').strip()
+    ticker = name.split('_')[0].upper().strip()
         df = load_equity(f)
         if df is not None:
             raw_data[name] = df
