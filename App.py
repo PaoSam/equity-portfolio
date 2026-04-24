@@ -5,38 +5,42 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime
-import requests
+import json
 
 st.set_page_config(page_title="Titan Portfolio Professional", layout="wide")
 
-# --- 1. RECUPERO MARGINI LIVE ---
-@st.cache_data(ttl=3600)
-def get_ibkr_margins(url):
+# --- 1. RECUPERO MARGINI DA FILE JSON ---
+@st.cache_data
+def get_margins_from_json(file):
     try:
-        header = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=header, timeout=15)
-        tables = pd.read_html(response.text, flavor='lxml')
-        margin_dict = {}
-        for df in tables:
-            df.columns = [str(c).strip() for c in df.columns]
-            if 'Underlying' in df.columns and 'Overnight Initial' in df.columns:
-                for _, row in df.iterrows():
-                    ticker = str(row['Underlying']).strip().upper()
-                    val_raw = str(row['Overnight Initial']).replace('$', '').replace(',', '').strip()
-                    try:
-                        margin_dict[ticker] = float(val_raw)
-                    except:
-                        continue
-        return margin_dict
-    except:
+        content = file.read()
+        data = json.loads(content)
+        # Supporta sia {"TICKER": valore} che lista di oggetti
+        if isinstance(data, dict):
+            return {k.upper().strip(): float(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            margin_dict = {}
+            for item in data:
+                if "ticker" in item and "margin" in item:
+                    margin_dict[str(item["ticker"]).upper().strip()] = float(item["margin"])
+            return margin_dict
+        return {}
+    except Exception as e:
+        st.warning(f"Errore lettura margins_ibkr.json: {e}")
         return {}
 
 st.markdown("# 📈 Analisi Avanzata Portafoglio Titan")
 
-url_ibkr = "https://www.interactivebrokers.co.uk/en/trading/margin-futures-fops.php?hm=eu&ex=us&rgt=0&rsk=1&pm=1&rst=101006010801080808"
+# --- UPLOAD FILE JSON MARGINI ---
+st.sidebar.header("📂 File Margini IBKR")
+margins_file = st.sidebar.file_uploader("Carica margins_ibkr.json", type="json", key="margins_json")
 
-with st.spinner('Sincronizzazione margini live...'):
-    live_margins = get_ibkr_margins(url_ibkr)
+if margins_file:
+    live_margins = get_margins_from_json(margins_file)
+    st.sidebar.success(f"✅ Caricati {len(live_margins)} margini")
+else:
+    live_margins = {}
+    st.sidebar.info("Carica il file margins_ibkr.json per visualizzare i margini.")
 
 uploaded_files = st.file_uploader("Carica file Titan (.txt)", type="txt", accept_multiple_files=True)
 
@@ -44,7 +48,7 @@ if uploaded_files:
     raw_data = {}
     all_dates = []
     strumenti_caricati = set()
-  
+
     def load_equity(uploaded_file):
         try:
             content = uploaded_file.getvalue().decode("utf-8")
@@ -63,7 +67,7 @@ if uploaded_files:
 
     for f in uploaded_files:
         name = f.name.replace('.txt', '').replace('#', '').strip()
-        ticker = name.split('_')[0].upper().strip()
+        ticker = name.split('*')[0].upper().strip()
         df = load_equity(f)
         if df is not None:
             raw_data[name] = df
@@ -73,62 +77,61 @@ if uploaded_files:
     if raw_data:
         selected_names = []
         ticker_map = {}
-      
+
         # --- SIDEBAR ---
         st.sidebar.header("🗓️ Filtri Temporali")
         abs_min_date, abs_max_date = min(all_dates).date(), max(all_dates).date()
         start_date = st.sidebar.date_input("Data Inizio", value=abs_min_date, min_value=abs_min_date, max_value=abs_max_date)
         end_date = st.sidebar.date_input("Data Fine", value=abs_max_date, min_value=abs_min_date, max_value=abs_max_date)
-       
+
         st.sidebar.write("---")
         st.sidebar.header("🎲 Parametri Monte Carlo")
         n_sim = st.sidebar.slider("Numero Simulazioni", 100, 5000, 1000)
         n_giorni = st.sidebar.number_input("Giorni Proiezione", value=252)
-        
-        # === NUOVO CHECKBOX PER ATTIVARE MONTE CARLO ===
-        run_montecarlo = st.sidebar.checkbox("Esegui Simulazione Monte Carlo", value=False, 
-                                             help="Attiva solo quando vuoi vedere la proiezione")
 
+        run_montecarlo = st.sidebar.checkbox("Esegui Simulazione Monte Carlo", value=False,
+                                             help="Attiva solo quando vuoi vedere la proiezione")
         st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
         for name in sorted(raw_data.keys()):
-            ticker_map[name] = name.split('_')[0].upper().strip()
+            ticker_map[name] = name.split('*')[0].upper().strip()
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
         st.sidebar.write("---")
         show_total_equity = st.sidebar.checkbox("Mostra Equity Totale (Portafoglio)", value=True, key="show_total")
-
         st.sidebar.write("---")
         st.sidebar.subheader("📌 Margini IBKR")
         margini_filtrati = [{"Asset": s, "Margine ($)": live_margins[s]} for s in strumenti_caricati if s in live_margins]
         if margini_filtrati:
             st.sidebar.table(pd.DataFrame(margini_filtrati).set_index("Asset"))
+        elif live_margins:
+            st.sidebar.warning("Nessun ticker degli strumenti trovato nel JSON.")
 
         if selected_names:
             dates_set = sorted([d for d in list(set(all_dates)) if start_date <= d.date() <= end_date])
             df_master = pd.DataFrame({'date': dates_set})
-          
+
             stats_list = []
             active_info = {d: [] for d in dates_set}
-          
+
             for name in selected_names:
                 ticker = ticker_map[name]
                 temp_df = raw_data[name].copy().rename(columns={'pnl': f'pnl_{name}', 'pos': f'pos_{name}'})
                 df_master = df_master.merge(temp_df[['date', f'pnl_{name}', f'pos_{name}']], on='date', how='left').fillna(0)
-              
+
                 df_master[f'eq_{name}'] = df_master[f'pnl_{name}'].cumsum()
-              
+
                 df_strat = temp_df[(temp_df['date'].dt.date >= start_date) & (temp_df['date'].dt.date <= end_date)].copy()
                 df_strat['is_active'] = df_strat[f'pos_{name}'] != 0
                 df_strat['trade_id'] = (df_strat['is_active'] != df_strat['is_active'].shift()).cumsum()
                 trades = df_strat[df_strat['is_active']].groupby('trade_id')[f'pnl_{name}'].sum()
-              
+
                 for d in dates_set:
                     pos_val = df_master.loc[df_master['date'] == d, f'pos_{name}'].values[0]
                     if pos_val != 0:
                         active_info[d].append(f"{name}({'L' if pos_val > 0 else 'S'})")
-               
+
                 if not trades.empty:
                     wins = trades[trades > 0]
                     losses = trades[trades <= 0]
@@ -152,10 +155,10 @@ if uploaded_files:
             pnl_cols = [f'pnl_{n}' for n in selected_names]
             df_master['Equity_Totale'] = df_master[pnl_cols].sum(axis=1).cumsum()
             df_master['DD'] = df_master['Equity_Totale'] - df_master['Equity_Totale'].cummax()
-          
+
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25],
                                 subplot_titles=("Equity Line Portafoglio", "Drawdown ($)", "Margine Reale ($)"))
-          
+
             if show_total_equity:
                 fig.add_trace(go.Scatter(x=df_master['date'], y=df_master['Equity_Totale'],
                                        name='PORTAFOGLIO', line=dict(color='black', width=4.5)),
@@ -195,7 +198,7 @@ if uploaded_files:
                 strat_list = active_info[d]
                 count = active_count_per_day[d]
                 if count > 0:
-                    text = f"<b>{count} strategie attive</b><br>" + "<br>".join(strat_list)
+                    text = f"{count} strategie attive<br>" + "<br>".join(strat_list)
                 else:
                     text = "Nessuna strategia attiva"
                 hover_text.append(text)
@@ -238,27 +241,23 @@ if uploaded_files:
                 st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
                 st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
-            # ====================== MONTE CARLO MODIFICATA ======================
+            # --- MONTE CARLO ---
             st.write("---")
             st.write("### 🎲 Simulazione Monte Carlo")
-
             if run_montecarlo:
                 returns = df_master['Equity_Totale'].diff().dropna()
                 if not returns.empty:
                     mu = returns.mean()
                     sigma = returns.std()
                     ultimo_valore = df_master['Equity_Totale'].iloc[-1]
-
                     simulazioni = np.zeros((n_giorni, n_sim))
                     for i in range(n_sim):
                         cambiamenti = np.random.normal(mu, sigma, n_giorni)
                         simulazioni[:, i] = ultimo_valore + np.cumsum(cambiamenti)
-
                     media_sim = np.mean(simulazioni, axis=1)
                     p5 = np.percentile(simulazioni, 5, axis=1)
                     p95 = np.percentile(simulazioni, 95, axis=1)
                     x_axis = np.arange(n_giorni)
-
                     fig_mc = go.Figure()
                     fig_mc.add_trace(go.Scatter(
                         x=np.concatenate([x_axis, x_axis[::-1]]),
@@ -278,18 +277,15 @@ if uploaded_files:
                     fig_mc.add_trace(go.Scatter(x=x_axis, y=media_sim, name='Media Attesa', line=dict(color='blue', width=3)))
                     fig_mc.add_trace(go.Scatter(x=x_axis, y=p5, name='Pessimista (5%)', line=dict(color='red', width=2, dash='dash')))
                     fig_mc.add_trace(go.Scatter(x=x_axis, y=p95, name='Ottimista (95%)', line=dict(color='green', width=2, dash='dash')))
-
-                    fig_mc.update_layout(height=600, template="plotly_white", 
-                                        xaxis_title="Giorni Futuri", 
+                    fig_mc.update_layout(height=600, template="plotly_white",
+                                        xaxis_title="Giorni Futuri",
                                         yaxis_title="Proiezione Equity ($)")
-                    
                     st.plotly_chart(fig_mc, use_container_width=True)
                     st.success(f"Basato sui rendimenti storici: c'è il 95% di probabilità che l'equity sia superiore a **${p5[-1]:,.0f}** tra {n_giorni} giorni.")
                 else:
                     st.info("Non ci sono abbastanza dati per eseguire la simulazione Monte Carlo.")
             else:
                 st.info("Attiva la checkbox nella sidebar per eseguire la simulazione Monte Carlo.")
-            # =====================================================================
 
             # --- PERFORMANCE ANNUALE ---
             st.write("---")
@@ -297,9 +293,9 @@ if uploaded_files:
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
             res['PnL Totale'] = res.sum(axis=1)
-            max_m, max_dd = max(m_giornaliero), abs(df_master['DD'].min())
+            max_m, max_dd = max(m_giornaliero) if m_giornaliero else 0, abs(df_master['DD'].min())
             cap_pru = max_m + (max_dd * 1.5)
-            res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2)
+            res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2) if cap_pru != 0 else 0
             st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
 
             # SIDEBAR RECAP
