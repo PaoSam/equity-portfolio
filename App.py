@@ -15,7 +15,6 @@ def get_margins_from_json(file):
     try:
         content = file.read()
         data = json.loads(content)
-        # Supporta sia {"TICKER": valore} che lista di oggetti
         if isinstance(data, dict):
             return {k.upper().strip(): float(v) for k, v in data.items()}
         elif isinstance(data, list):
@@ -65,9 +64,9 @@ if uploaded_files:
         except:
             return None
 
-for f in uploaded_files:
-    name = f.name.replace('.txt', '').replace('#', '').strip()
-    ticker = name.split('_')[0].upper().strip()
+    for f in uploaded_files:
+        name = f.name.replace('.txt', '').replace('#', '').strip()
+        ticker = name.split('_')[0].upper().strip()  # <-- MODIFICA: split su '_' invece di '*'
         df = load_equity(f)
         if df is not None:
             raw_data[name] = df
@@ -94,7 +93,7 @@ for f in uploaded_files:
         st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
         for name in sorted(raw_data.keys()):
-            ticker_map[name] = name.split('*')[0].upper().strip()
+            ticker_map[name] = name.split('_')[0].upper().strip()  # <-- MODIFICA: coerente con sopra
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
@@ -293,7 +292,8 @@ for f in uploaded_files:
             df_master['Year'] = df_master['date'].dt.year
             res = df_master.groupby('Year')[pnl_cols].sum().round(0)
             res['PnL Totale'] = res.sum(axis=1)
-            max_m, max_dd = max(m_giornaliero) if m_giornaliero else 0, abs(df_master['DD'].min())
+            max_m = max(m_giornaliero) if m_giornaliero else 0
+            max_dd = abs(df_master['DD'].min())
             cap_pru = max_m + (max_dd * 1.5)
             res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2) if cap_pru != 0 else 0
             st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
