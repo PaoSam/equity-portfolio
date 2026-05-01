@@ -66,7 +66,7 @@ if uploaded_files:
 
     for f in uploaded_files:
         name = f.name.replace('.txt', '').replace('#', '').strip()
-        ticker = name.split('_')[0].upper().strip()  # <-- MODIFICA: split su '_' invece di '*'
+        ticker = name.split('_')[0].upper().strip()
         df = load_equity(f)
         if df is not None:
             raw_data[name] = df
@@ -93,7 +93,7 @@ if uploaded_files:
         st.sidebar.write("---")
         st.sidebar.header("🛠️ Strategie")
         for name in sorted(raw_data.keys()):
-            ticker_map[name] = name.split('_')[0].upper().strip()  # <-- MODIFICA: coerente con sopra
+            ticker_map[name] = name.split('_')[0].upper().strip()
             if st.sidebar.checkbox(f"{name}", value=True, key=name):
                 selected_names.append(name)
 
@@ -215,32 +215,46 @@ if uploaded_files:
             fig.update_layout(height=900, template="plotly_white", hovermode="x unified", showlegend=True)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- MATRICE DI CORRELAZIONE ---
+            # -------------------------------------------------------
+            # --- MATRICE DI CORRELAZIONE (a pulsante) ---
+            # -------------------------------------------------------
             st.write("---")
-            st.write("### 🧬 Matrice di Correlazione")
-            corr = df_master[pnl_cols].corr()
-            corr.columns = [c.replace('pnl_', '') for c in corr.columns]
-            corr.index = [c.replace('pnl_', '') for c in corr.index]
-            fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
-            fig_corr.update_layout(height=700)
-            st.plotly_chart(fig_corr, use_container_width=True)
+            if st.button("🧬 Mostra Matrice di Correlazione"):
+                st.session_state['show_corr'] = not st.session_state.get('show_corr', False)
 
-            # --- STATISTICHE ---
+            if st.session_state.get('show_corr', False):
+                st.write("### 🧬 Matrice di Correlazione")
+                corr = df_master[pnl_cols].corr()
+                corr.columns = [c.replace('pnl_', '') for c in corr.columns]
+                corr.index = [c.replace('pnl_', '') for c in corr.index]
+                fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
+                fig_corr.update_layout(height=700)
+                st.plotly_chart(fig_corr, use_container_width=True)
+
+            # -------------------------------------------------------
+            # --- PERFORMANCE TRADE (a pulsante) ---
+            # -------------------------------------------------------
             st.write("---")
-            col1, col2 = st.columns([2, 1])
-            with col1:
+            if st.button("📊 Mostra Performance Trade"):
+                st.session_state['show_perf'] = not st.session_state.get('show_perf', False)
+
+            if st.session_state.get('show_perf', False):
                 st.write("### 📊 Performance Trade")
-                st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
-            with col2:
-                total_pnl = df_master[pnl_cols].sum().sum()
-                total_dd = abs(df_master['DD'].min())
-                days_diff_total = (end_date - start_date).days
-                ann_return = (total_pnl / days_diff_total * 365) if days_diff_total > 0 else 0
-                st.write("### 🏆 Portfolio Efficiency")
-                st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
-                st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
+                with col2:
+                    total_pnl = df_master[pnl_cols].sum().sum()
+                    total_dd = abs(df_master['DD'].min())
+                    days_diff_total = (end_date - start_date).days
+                    ann_return = (total_pnl / days_diff_total * 365) if days_diff_total > 0 else 0
+                    st.write("### 🏆 Portfolio Efficiency")
+                    st.metric("MAR Ratio Totale", f"{(ann_return/total_dd if total_dd!=0 else 0):.2f}")
+                    st.metric("Rendimento Annuo Medio", f"${ann_return:,.0f}")
 
+            # -------------------------------------------------------
             # --- MONTE CARLO ---
+            # -------------------------------------------------------
             st.write("---")
             st.write("### 🎲 Simulazione Monte Carlo")
             if run_montecarlo:
@@ -286,19 +300,28 @@ if uploaded_files:
             else:
                 st.info("Attiva la checkbox nella sidebar per eseguire la simulazione Monte Carlo.")
 
-            # --- PERFORMANCE ANNUALE ---
+            # -------------------------------------------------------
+            # --- PERFORMANCE ANNUALE E ROE (a pulsante) ---
+            # -------------------------------------------------------
             st.write("---")
-            st.write("### 📅 Performance Annuale e ROE")
-            df_master['Year'] = df_master['date'].dt.year
-            res = df_master.groupby('Year')[pnl_cols].sum().round(0)
-            res['PnL Totale'] = res.sum(axis=1)
+            if st.button("📅 Mostra Performance Annuale e ROE"):
+                st.session_state['show_annual'] = not st.session_state.get('show_annual', False)
+
+            if st.session_state.get('show_annual', False):
+                st.write("### 📅 Performance Annuale e ROE")
+                df_master['Year'] = df_master['date'].dt.year
+                res = df_master.groupby('Year')[pnl_cols].sum().round(0)
+                res['PnL Totale'] = res.sum(axis=1)
+                max_m = max(m_giornaliero) if m_giornaliero else 0
+                max_dd = abs(df_master['DD'].min())
+                cap_pru = max_m + (max_dd * 1.5)
+                res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2) if cap_pru != 0 else 0
+                st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
+
+            # SIDEBAR RECAP
             max_m = max(m_giornaliero) if m_giornaliero else 0
             max_dd = abs(df_master['DD'].min())
             cap_pru = max_m + (max_dd * 1.5)
-            res['ROE %'] = (res['PnL Totale'] / cap_pru * 100).round(2) if cap_pru != 0 else 0
-            st.dataframe(res.style.format("{:,.0f}"), use_container_width=True)
-
-            # SIDEBAR RECAP
             st.sidebar.write("---")
             st.sidebar.metric("Picco Margine Reale", f"${max_m:,.0f}")
             st.sidebar.metric("Max Drawdown", f"-${max_dd:,.0f}")
